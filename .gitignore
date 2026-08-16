@@ -31,3 +31,5 @@ dist/
 *.key
 credentials.json
 .gstack/
+
+/data/
