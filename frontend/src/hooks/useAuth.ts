@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getCurrentUser, updateUserSettings } from "../api/endpoints/auth";
+import { getAvailableTimezones, getCurrentUser, updateUserSettings } from "../api/endpoints/auth";
 
 export function useAuth() {
   const query = useQuery({
@@ -23,5 +23,14 @@ export function useUpdateUserSettings() {
     onSuccess: (user) => {
       queryClient.setQueryData(["auth", "me"], user);
     },
+  });
+}
+
+/** The backend's canonical timezone list — rarely changes, so cache indefinitely. */
+export function useAvailableTimezones() {
+  return useQuery({
+    queryKey: ["auth", "timezones"],
+    queryFn: getAvailableTimezones,
+    staleTime: Infinity,
   });
 }

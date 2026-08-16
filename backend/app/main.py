@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import accounts, auth, blacklist, categories, export, gmail, summary, transactions
-from app.services import sync_events_consumer
+from app.services import sync_fetch_events_consumer
 from moneyman_shared.config import get_settings
 
 settings = get_settings()
@@ -13,9 +13,9 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    consumer_task = asyncio.create_task(sync_events_consumer.consume_sync_events_forever())
+    consumer_task = asyncio.create_task(sync_fetch_events_consumer.consume_sync_fetch_events_forever())
     yield
-    sync_events_consumer.stop_consuming()
+    sync_fetch_events_consumer.stop_consuming()
     await consumer_task
 
 

@@ -1,7 +1,7 @@
 [project]
 name = "moneyman-worker"
 version = "0.1.0"
-description = "Consumes gmail-sync-jobs from Pulsar, runs the Gmail fetch + classify/extract pipeline, and publishes completion events."
+description = "Two-stage Pulsar consumer: fetches Gmail messages per sync segment and classifies/extracts each candidate email (see docs/design.md)."
 requires-python = ">=3.11"
 dependencies = [
     "moneyman-shared",

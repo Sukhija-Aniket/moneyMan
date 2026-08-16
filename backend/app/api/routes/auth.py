@@ -128,6 +128,16 @@ async def logout(response: Response) -> dict:
     return {"status": "ok"}
 
 
+@router.get("/timezones", response_model=list[str])
+async def list_timezones() -> list[str]:
+    """The canonical IANA timezone list the backend validates PATCH /auth/me against —
+    served from here (rather than the frontend using the browser's own Intl.supportedValuesOf)
+    so the two can never drift apart. Different tzdata builds disagree on which deprecated
+    backward-compat aliases (e.g. Asia/Calcutta) exist; the frontend must offer only names
+    this exact backend instance's zoneinfo actually has."""
+    return sorted(available_timezones())
+
+
 @router.get("/me", response_model=UserOut)
 async def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user

@@ -27,6 +27,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   }
 }
 
+/** The backend's own canonical IANA timezone list — use this for any timezone picker
+ * instead of the browser's Intl.supportedValuesOf, which can include names (e.g. deprecated
+ * aliases like "Asia/Calcutta") that the backend's tzdata build doesn't recognize. */
+export async function getAvailableTimezones(): Promise<string[]> {
+  return apiFetch<string[]>("/auth/timezones");
+}
+
 export async function updateUserSettings(update: UserSettingsUpdate): Promise<CurrentUser> {
   return apiFetch<CurrentUser>("/auth/me", { method: "PATCH", body: update });
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import type { LlmProvider } from "../api/endpoints/auth";
-import { useAuth, useUpdateUserSettings } from "../hooks/useAuth";
+import { useAuth, useAvailableTimezones, useUpdateUserSettings } from "../hooks/useAuth";
 
 const PROVIDER_OPTIONS: { value: LlmProvider; label: string; description: string }[] = [
   {
@@ -16,16 +16,10 @@ const PROVIDER_OPTIONS: { value: LlmProvider; label: string; description: string
   },
 ];
 
-type IntlWithSupportedValuesOf = typeof Intl & {
-  supportedValuesOf?: (key: "timeZone") => string[];
-};
-
-const intlWithTimeZones = Intl as IntlWithSupportedValuesOf;
-const TIMEZONE_OPTIONS: string[] = intlWithTimeZones.supportedValuesOf?.("timeZone") ?? ["UTC"];
-
 export function SettingsPage() {
   const { user } = useAuth();
   const updateSettings = useUpdateUserSettings();
+  const { data: timezoneOptions } = useAvailableTimezones();
 
   const [llmProvider, setLlmProvider] = useState<LlmProvider | null>(null);
   const [tz, setTz] = useState<string | null>(null);
@@ -91,9 +85,16 @@ export function SettingsPage() {
         <select
           value={tz ?? ""}
           onChange={(e) => setTz(e.target.value)}
-          className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+          disabled={!timezoneOptions}
+          className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm disabled:opacity-50"
         >
-          {TIMEZONE_OPTIONS.map((option) => (
+          {/* Guards against a previously-saved value the backend's tzdata no longer
+              recognizes (e.g. a deprecated alias like "Asia/Calcutta") — keeps it selectable
+              rather than silently switching the dropdown to a blank/different value. */}
+          {tz && timezoneOptions && !timezoneOptions.includes(tz) && (
+            <option value={tz}>{tz} (unrecognized)</option>
+          )}
+          {(timezoneOptions ?? (tz ? [tz] : [])).map((option) => (
             <option key={option} value={option}>
               {option}
             </option>

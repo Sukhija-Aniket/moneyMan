@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError } from "../api/client";
 import { DateRangePicker, DateRange } from "../components/DateRangePicker";
-import { useGmailStatus, useGmailSync, useStartRangeSync, useSyncTriggerStatus } from "../hooks/useGmailSync";
+import { useGmailStatus, useGmailSync, useStartRangeSync, useSyncRequestStatus } from "../hooks/useGmailSync";
 import {
   useAddBlacklistedSender,
   useBlacklistedSenders,
@@ -20,8 +20,8 @@ export function SyncPage() {
   const [range, setRange] = useState<DateRange>(currentMonthRange());
 
   const startRangeSync = useStartRangeSync();
-  const [activeTriggerId, setActiveTriggerId] = useState<string | null>(null);
-  const triggerStatus = useSyncTriggerStatus(activeTriggerId);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const requestStatus = useSyncRequestStatus(activeRequestId);
 
   const { data: blacklist } = useBlacklistedSenders();
   const addBlacklisted = useAddBlacklistedSender();
@@ -36,11 +36,11 @@ export function SyncPage() {
 
   function handleSyncRange() {
     startRangeSync.mutate(range, {
-      onSuccess: (trigger) => setActiveTriggerId(trigger.id),
+      onSuccess: (request) => setActiveRequestId(request.id),
     });
   }
 
-  const rangeSyncInProgress = triggerStatus.data?.status === "in_progress";
+  const rangeSyncInProgress = requestStatus.data?.status === "in_progress";
 
   return (
     <div className="max-w-xl space-y-6">
@@ -115,18 +115,36 @@ export function SyncPage() {
 
         {rangeSyncInProgress && (
           <p className="mt-3 text-sm text-gray-600">
-            Syncing {triggerStatus.data?.date_from} to {triggerStatus.data?.date_to}
+            Syncing {requestStatus.data?.date_from} to {requestStatus.data?.date_to}
             {" "}— this can take a while for large ranges.
           </p>
         )}
-        {triggerStatus.data?.status === "success" && (
+        {requestStatus.data?.status === "success" && (
           <p className="mt-3 text-sm text-green-700">
-            Synced {triggerStatus.data.date_from} to {triggerStatus.data.date_to}.
+            {requestStatus.data.segments.length === 0
+              ? `${requestStatus.data.date_from} to ${requestStatus.data.date_to} was already fully synced.`
+              : `Synced ${requestStatus.data.date_from} to ${requestStatus.data.date_to}.`}
           </p>
         )}
-        {triggerStatus.data?.status === "failed" && (
+        {requestStatus.data?.status === "partial_failure" && (
+          <div className="mt-3 space-y-1 text-sm">
+            <p className="text-amber-700">
+              Some parts of {requestStatus.data.date_from} to {requestStatus.data.date_to} failed to
+              sync — re-run "Sync range" for the same dates to retry just those.
+            </p>
+            <ul className="ml-4 list-disc text-gray-600">
+              {requestStatus.data.segments.map((segment) => (
+                <li key={segment.id}>
+                  {segment.date_from} to {segment.date_to}: {segment.status}
+                  {segment.status === "failed" && segment.error ? ` — ${segment.error}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {requestStatus.data?.status === "failed" && (
           <p className="mt-3 text-sm text-red-600">
-            Sync failed: {triggerStatus.data.error ?? "unknown error"}
+            Sync failed: {requestStatus.data.segments[0]?.error ?? "unknown error"}
           </p>
         )}
         {startRangeSync.isError && (

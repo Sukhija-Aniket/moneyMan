@@ -20,16 +20,36 @@ class GmailSyncResult(BaseModel):
     extract_failed: int
 
 
-class GmailSyncTriggerOut(BaseModel):
+class SyncSegmentOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     status: str
+    total_candidates: int | None = None
+    processed_candidates: int
     error: str | None = None
     started_at: datetime
     completed_at: datetime | None = None
+
+
+class SyncRequestOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    date_from: date | None = None
+    date_to: date | None = None
+    status: str
+    created_at: datetime
+    segments: list[SyncSegmentOut] = []
+
+
+class CurrentSyncOut(BaseModel):
+    in_progress: bool
+    segment_id: uuid.UUID | None = None
+    date_from: date | None = None
+    date_to: date | None = None
 
 
 class GmailStatus(BaseModel):

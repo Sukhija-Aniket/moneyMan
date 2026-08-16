@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: moneyman
+      POSTGRES_PASSWORD: moneyman
+      POSTGRES_DB: moneyman
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moneyman"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pulsar:
+    image: apachepulsar/pulsar:3.3.1
+    command: bin/pulsar standalone
+    ports:
+      - "6650:6650" # broker (client connections)
+      - "8080:8080" # admin/web UI + REST
+    volumes:
+      - pulsar-data:/pulsar/data
+    healthcheck:
+      test: ["CMD", "bin/pulsar-admin", "brokers", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://moneyman:moneyman@postgres:5432/moneyman
+      PULSAR_SERVICE_URL: pulsar://pulsar:6650
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: worker/Dockerfile
+    env_file:
+      - ../worker/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://moneyman:moneyman@postgres:5432/moneyman
+      PULSAR_SERVICE_URL: pulsar://pulsar:6650
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
+  pulsar-data:
