@@ -7,9 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.transaction import Transaction
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.db.models.transaction import Transaction
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
 from app.deps import get_current_user
 
 router = APIRouter(prefix="/export", tags=["export"])
@@ -23,7 +23,10 @@ async def export_transactions_csv(
     stmt = (
         select(Transaction)
         .options(selectinload(Transaction.category), selectinload(Transaction.account))
-        .where(Transaction.user_id == current_user.id)
+        .where(
+            Transaction.user_id == current_user.id,
+            Transaction.review_status.not_in(["not_transaction", "duplicate"]),
+        )
         .order_by(Transaction.txn_date.desc().nullslast())
     )
     result = await db.execute(stmt)
@@ -40,7 +43,7 @@ async def export_transactions_csv(
             "merchant",
             "category",
             "account",
-            "needs_review",
+            "review_status",
             "confidence",
         ]
     )
@@ -56,7 +59,7 @@ async def export_transactions_csv(
                 txn.account.display_name if txn.account and txn.account.display_name else (
                     txn.account.issuer_name if txn.account else ""
                 ),
-                txn.needs_review,
+                txn.review_status,
                 txn.confidence_score,
             ]
         )

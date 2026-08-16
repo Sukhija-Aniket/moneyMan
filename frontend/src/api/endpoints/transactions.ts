@@ -2,6 +2,8 @@ import { apiFetch, buildDownloadUrl } from "../client";
 
 export type TxnType = "debit" | "credit";
 
+export type ReviewStatus = "pending" | "confirmed" | "not_transaction" | "duplicate";
+
 export interface Transaction {
   id: string;
   amount: number;
@@ -14,7 +16,9 @@ export interface Transaction {
   account_display_name: string;
   txn_date: string;
   confidence_score: number;
-  needs_review: boolean;
+  review_status: ReviewStatus;
+  duplicate_of_transaction_id: string | null;
+  ambiguity_notes: string | null;
 }
 
 export interface TransactionListResponse {
@@ -33,7 +37,8 @@ export interface TransactionFilters {
   min_amount?: number;
   max_amount?: number;
   search?: string;
-  needs_review?: boolean;
+  review_status?: ReviewStatus;
+  include_dismissed?: boolean;
   page?: number;
   page_size?: number;
   sort?: string;
@@ -42,7 +47,8 @@ export interface TransactionFilters {
 export interface TransactionUpdate {
   category_id?: string;
   merchant_normalized?: string;
-  needs_review?: boolean;
+  review_status?: ReviewStatus;
+  duplicate_of_transaction_id?: string;
 }
 
 export async function listTransactions(

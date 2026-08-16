@@ -11,7 +11,8 @@ from alembic import context
 
 sys.path.append(os.getcwd())
 
-from app.db.base import Base  # noqa: E402
+from moneyman_shared.db.base import Base  # noqa: E402
+from moneyman_shared.db.models import *  # noqa: E402,F401,F403
 from app.db.models import *  # noqa: E402,F401,F403
 
 config = context.config

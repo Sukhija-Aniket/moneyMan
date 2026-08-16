@@ -6,11 +6,11 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, fun
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from moneyman_shared.db.base import Base
 
 if TYPE_CHECKING:
-    from app.db.models.transaction import Transaction
-    from app.db.models.user import User
+    from moneyman_shared.db.models.transaction import Transaction
+    from moneyman_shared.db.models.user import User
 
 
 class RawEmail(Base):

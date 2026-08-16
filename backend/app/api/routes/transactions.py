@@ -6,9 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.transaction import Transaction
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.db.models.review_status import ReviewStatus
+from moneyman_shared.db.models.transaction import Transaction
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
 from app.deps import get_current_user
 from app.schemas.transaction import TransactionListResponse, TransactionOut, TransactionUpdate
 
@@ -25,7 +26,8 @@ def _apply_filters(
     amount_min: float | None,
     amount_max: float | None,
     search: str | None,
-    needs_review: bool | None,
+    review_status: ReviewStatus | None,
+    include_dismissed: bool,
 ):
     if date_from is not None:
         stmt = stmt.where(Transaction.txn_date >= date_from)
@@ -44,8 +46,10 @@ def _apply_filters(
     if search:
         pattern = f"%{search}%"
         stmt = stmt.where(Transaction.merchant_normalized.ilike(pattern))
-    if needs_review is not None:
-        stmt = stmt.where(Transaction.needs_review == needs_review)
+    if review_status is not None:
+        stmt = stmt.where(Transaction.review_status == review_status)
+    elif not include_dismissed:
+        stmt = stmt.where(Transaction.review_status.not_in(["not_transaction", "duplicate"]))
     return stmt
 
 
@@ -61,13 +65,24 @@ async def list_transactions(
     amount_min: float | None = None,
     amount_max: float | None = None,
     search: str | None = None,
-    needs_review: bool | None = None,
+    review_status: ReviewStatus | None = None,
+    include_dismissed: bool = False,
     limit: int = Query(default=50, le=200, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> TransactionListResponse:
     base_stmt = select(Transaction).where(Transaction.user_id == current_user.id)
     base_stmt = _apply_filters(
-        base_stmt, date_from, date_to, category_id, account_id, txn_type, amount_min, amount_max, search, needs_review
+        base_stmt,
+        date_from,
+        date_to,
+        category_id,
+        account_id,
+        txn_type,
+        amount_min,
+        amount_max,
+        search,
+        review_status,
+        include_dismissed,
     )
 
     count_stmt = select(func.count()).select_from(base_stmt.subquery())

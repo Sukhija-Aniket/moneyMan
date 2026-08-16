@@ -5,9 +5,9 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.config import get_settings
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
 
 settings = get_settings()
 

@@ -11,6 +11,12 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+
+  /** FastAPI error responses are `{ "detail": "..." }` — fall back to a generic message otherwise. */
+  get detail(): string {
+    const detail = (this.body as { detail?: unknown } | undefined)?.detail;
+    return typeof detail === "string" ? detail : this.message;
+  }
 }
 
 type QueryParams = object;

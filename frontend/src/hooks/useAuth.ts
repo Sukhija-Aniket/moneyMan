@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { getCurrentUser } from "../api/endpoints/auth";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { getCurrentUser, updateUserSettings } from "../api/endpoints/auth";
 
 export function useAuth() {
   const query = useQuery({
@@ -14,4 +14,14 @@ export function useAuth() {
     isAuthenticated: !!query.data,
     refetch: query.refetch,
   };
+}
+
+export function useUpdateUserSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateUserSettings,
+    onSuccess: (user) => {
+      queryClient.setQueryData(["auth", "me"], user);
+    },
+  });
 }

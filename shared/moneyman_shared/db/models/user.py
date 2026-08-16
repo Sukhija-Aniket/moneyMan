@@ -6,15 +6,16 @@ from sqlalchemy import DateTime, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from moneyman_shared.db.base import Base
 
 if TYPE_CHECKING:
-    from app.db.models.account import Account
-    from app.db.models.category import Category
-    from app.db.models.gmail_watch_state import GmailWatchState
-    from app.db.models.oauth_token import OAuthToken
-    from app.db.models.raw_email import RawEmail
-    from app.db.models.transaction import Transaction
+    from moneyman_shared.db.models.account import Account
+    from moneyman_shared.db.models.blacklisted_sender import BlacklistedSender
+    from moneyman_shared.db.models.category import Category
+    from moneyman_shared.db.models.gmail_watch_state import GmailWatchState
+    from moneyman_shared.db.models.oauth_token import OAuthToken
+    from moneyman_shared.db.models.raw_email import RawEmail
+    from moneyman_shared.db.models.transaction import Transaction
 
 
 class User(Base):
@@ -25,6 +26,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     full_name: Mapped[str | None] = mapped_column(String, nullable=True)
     picture_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    llm_provider: Mapped[str] = mapped_column(String, nullable=False, server_default="anthropic")
+    timezone: Mapped[str] = mapped_column(String, nullable=False, server_default="UTC")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -41,3 +44,6 @@ class User(Base):
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     categories: Mapped[list["Category"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     accounts: Mapped[list["Account"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    blacklisted_senders: Mapped[list["BlacklistedSender"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )

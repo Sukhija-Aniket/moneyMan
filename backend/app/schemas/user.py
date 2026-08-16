@@ -10,3 +10,10 @@ class UserOut(BaseModel):
     email: str
     full_name: str | None = None
     picture_url: str | None = None
+    llm_provider: str
+    timezone: str
+
+
+class UserSettingsUpdate(BaseModel):
+    llm_provider: str | None = None
+    timezone: str | None = None

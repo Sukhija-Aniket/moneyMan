@@ -1,17 +1,20 @@
 import base64
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
-
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from datetime import date, datetime, timedelta, timezone
 
 # googleapiclient uses httplib2, which verifies TLS against certifi's public-CA bundle rather
 # than the OS trust store. On networks behind a TLS-inspecting proxy (e.g. corporate Zscaler),
 # certifi doesn't have the proxy's root CA, so requests fail with CERTIFICATE_VERIFY_FAILED even
 # though the OS trust store (and thus stdlib ssl with default args) already trusts it. Point
-# httplib2 at the OS bundle, which is kept in sync with proxy-injected roots, instead.
+# httplib2 at the OS bundle, which is kept in sync with proxy-injected roots, instead. This MUST
+# run before `httplib2` is imported (directly or via googleapiclient below) — httplib2.CA_CERTS
+# is a module-level constant evaluated once at import time, so setting the env var afterwards
+# has no effect.
 os.environ.setdefault("HTTPLIB2_CA_CERTS", "/etc/ssl/certs/ca-bundle.pem")
+
+from google.oauth2.credentials import Credentials  # noqa: E402
+from googleapiclient.discovery import build  # noqa: E402
 
 
 @dataclass
@@ -30,15 +33,57 @@ def _build_service(access_token: str):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 
-def list_recent_message_ids(access_token: str, max_results: int) -> list[str]:
+def _exclusion_query(blacklisted_senders: list[str] | None) -> str:
+    """Builds Gmail search '-from:' exclusion terms so blacklisted senders are never fetched
+    at all — cheaper and cleaner than filtering after fetch, at the cost of losing visibility
+    into excluded mail entirely (nothing is stored, so a wrongly-blacklisted sender's real
+    transactions vanish with no trace to notice the gap)."""
+    if not blacklisted_senders:
+        return ""
+    return " ".join(f"-from:{sender}" for sender in blacklisted_senders)
+
+
+def list_recent_message_ids(
+    access_token: str, max_results: int, blacklisted_senders: list[str] | None = None
+) -> list[str]:
     service = _build_service(access_token)
+    query = _exclusion_query(blacklisted_senders)
     response = (
         service.users()
         .messages()
-        .list(userId="me", maxResults=max_results, labelIds=["INBOX"])
+        .list(userId="me", maxResults=max_results, q=query or None, labelIds=["INBOX"])
         .execute()
     )
     return [m["id"] for m in response.get("messages", [])]
+
+
+def list_message_ids_in_range(
+    access_token: str, date_from: date, date_to: date, blacklisted_senders: list[str] | None = None
+) -> list[str]:
+    """Fetches every inbox message received within [date_from, date_to] (both inclusive),
+    paginating through all results — unlike list_recent_message_ids, this has no result cap.
+
+    Gmail's after:/before: search operators are date-only (no time-of-day) and before: is
+    exclusive, so date_to is advanced by one day to make the requested end date inclusive.
+    """
+    service = _build_service(access_token)
+    date_query = f"after:{date_from.strftime('%Y/%m/%d')} before:{(date_to + timedelta(days=1)).strftime('%Y/%m/%d')}"
+    exclusion = _exclusion_query(blacklisted_senders)
+    query = f"{date_query} {exclusion}".strip()
+
+    message_ids: list[str] = []
+    page_token: str | None = None
+    while True:
+        request = service.users().messages().list(
+            userId="me", q=query, labelIds=["INBOX"], pageToken=page_token
+        )
+        response = request.execute()
+        message_ids.extend(m["id"] for m in response.get("messages", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return message_ids
 
 
 def _extract_header(headers: list[dict], name: str) -> str | None:

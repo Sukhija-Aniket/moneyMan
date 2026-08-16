@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ApiError } from "../api/client";
 import { DateRangePicker, DateRange } from "../components/DateRangePicker";
 import { SummaryCard } from "../components/SummaryCard";
 import { CategoryBreakdownChart } from "../components/charts/CategoryBreakdownChart";
@@ -6,8 +7,16 @@ import { AccountBreakdownChart } from "../components/charts/AccountBreakdownChar
 import { BankBreakdownChart } from "../components/charts/BankBreakdownChart";
 import { TrendChart } from "../components/charts/TrendChart";
 import { useByAccount, useByBank, useByCategory, useOverview, useTrends } from "../hooks/useSummary";
-import { useGmailSync } from "../hooks/useGmailSync";
 import { currentMonthRange, formatMoney } from "../lib/dateRange";
+
+function firstDateRangeError(...errors: (Error | null)[]): string | null {
+  for (const err of errors) {
+    if (err instanceof ApiError && err.status === 400) {
+      return err.detail;
+    }
+  }
+  return null;
+}
 
 export function DashboardPage() {
   const [range, setRange] = useState<DateRange>(currentMonthRange());
@@ -17,34 +26,18 @@ export function DashboardPage() {
   const byAccount = useByAccount(range);
   const byBank = useByBank(range);
   const trends = useTrends(6);
-  const sync = useGmailSync();
+
+  const dateRangeError = firstDateRangeError(overview.error, byCategory.error, byAccount.error, byBank.error);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
-        <div className="flex items-center gap-3">
-          <DateRangePicker value={range} onChange={setRange} />
-          <button
-            onClick={() => sync.mutate()}
-            disabled={sync.isPending}
-            className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-          >
-            {sync.isPending ? "Syncing..." : "Sync now"}
-          </button>
-        </div>
+        <DateRangePicker value={range} onChange={setRange} />
       </div>
 
-      {sync.isSuccess && (
-        <div className="rounded-md bg-green-50 px-4 py-2 text-sm text-green-700">
-          Synced {sync.data.synced_count} emails, found{" "}
-          {sync.data.new_transactions_count} new transactions.
-        </div>
-      )}
-      {sync.isError && (
-        <div className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-700">
-          Sync failed. Please try again.
-        </div>
+      {dateRangeError && (
+        <div className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-700">{dateRangeError}</div>
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

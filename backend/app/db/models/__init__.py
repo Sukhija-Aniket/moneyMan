@@ -1,10 +1,8 @@
-from app.db.models.account import Account
-from app.db.models.category import Category
-from app.db.models.gmail_watch_state import GmailWatchState
-from app.db.models.oauth_token import OAuthToken
-from app.db.models.raw_email import RawEmail
-from app.db.models.transaction import Transaction
-from app.db.models.user import User
+# Import shared models first so SyncTrigger's FK to users.id can always resolve,
+# regardless of which module is the first to import anything from app.db.models.
+from moneyman_shared.db.models import Account, Category, GmailWatchState, OAuthToken, RawEmail, Transaction, User
+
+from app.db.models.sync_trigger import SyncTrigger
 
 __all__ = [
     "Account",
@@ -12,6 +10,7 @@ __all__ = [
     "GmailWatchState",
     "OAuthToken",
     "RawEmail",
+    "SyncTrigger",
     "Transaction",
     "User",
 ]

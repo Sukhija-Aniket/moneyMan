@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.account import Account
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.db.models.account import Account
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
 from app.deps import get_current_user
 from app.schemas.account import AccountOut, AccountUpdate
 

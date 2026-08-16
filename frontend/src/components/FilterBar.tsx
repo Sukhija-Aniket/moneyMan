@@ -6,11 +6,11 @@ import { DateRangePicker } from "./DateRangePicker";
 export function FilterBar({
   filters,
   onChange,
-  showNeedsReviewToggle = true,
+  showIncludeDismissedToggle = true,
 }: {
   filters: TransactionFilters;
   onChange: (filters: TransactionFilters) => void;
-  showNeedsReviewToggle?: boolean;
+  showIncludeDismissedToggle?: boolean;
 }) {
   const { data: categories } = useCategories();
   const { data: accounts } = useAccounts();
@@ -87,14 +87,14 @@ export function FilterBar({
         />
       </label>
 
-      {showNeedsReviewToggle && (
+      {showIncludeDismissedToggle && (
         <label className="flex items-center gap-2 text-sm text-gray-600">
           <input
             type="checkbox"
-            checked={!!filters.needs_review}
-            onChange={(e) => update({ needs_review: e.target.checked || undefined })}
+            checked={!!filters.include_dismissed}
+            onChange={(e) => update({ include_dismissed: e.target.checked || undefined })}
           />
-          Needs review only
+          Include dismissed
         </label>
       )}
     </div>

@@ -1,0 +1,24 @@
+[project]
+name = "moneyman-shared"
+version = "0.1.0"
+description = "Shared DB models, Gmail/Google OAuth client, LLM provider abstraction, and config used by both the backend API and the sync worker."
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy[asyncio]>=2.0.35",
+    "asyncpg>=0.30.0",
+    "pydantic-settings>=2.5.2",
+    "google-auth>=2.35.0",
+    "google-auth-oauthlib>=1.2.1",
+    "google-api-python-client>=2.149.0",
+    "anthropic>=0.39.0",
+    "cryptography>=43.0.3",
+    "httpx>=0.27.2",
+    "pulsar-client>=3.5.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["moneyman_shared*"]

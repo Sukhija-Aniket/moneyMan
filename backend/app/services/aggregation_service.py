@@ -4,9 +4,11 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.account import Account
-from app.db.models.category import Category
-from app.db.models.transaction import Transaction
+from moneyman_shared.db.models.account import Account
+from moneyman_shared.db.models.category import Category
+from moneyman_shared.db.models.transaction import Transaction
+
+_DISMISSED_STATUSES = ("not_transaction", "duplicate")
 
 
 async def get_overview(
@@ -23,8 +25,8 @@ async def get_overview(
             func.sum(Transaction.amount).filter(Transaction.txn_type == "debit"), 0
         ).label("total_spend"),
         func.count(Transaction.id).label("transaction_count"),
-        func.count(Transaction.id).filter(Transaction.needs_review.is_(True)).label("needs_review_count"),
-    ).where(Transaction.user_id == user_id)
+        func.count(Transaction.id).filter(Transaction.review_status == "pending").label("needs_review_count"),
+    ).where(Transaction.user_id == user_id, Transaction.review_status.not_in(_DISMISSED_STATUSES))
 
     if date_from is not None:
         stmt = stmt.where(Transaction.txn_date >= date_from)
@@ -46,7 +48,9 @@ async def get_overview(
     }
 
 
-async def get_by_category(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+async def get_by_category(
+    db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
+) -> list[dict]:
     stmt = (
         select(
             Category.id,
@@ -56,10 +60,15 @@ async def get_by_category(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
         )
         .select_from(Transaction)
         .join(Category, Transaction.category_id == Category.id, isouter=True)
-        .where(Transaction.user_id == user_id)
+        .where(Transaction.user_id == user_id, Transaction.review_status.not_in(_DISMISSED_STATUSES))
         .group_by(Category.id, Category.name)
         .order_by(func.sum(Transaction.amount).desc())
     )
+    if date_from is not None:
+        stmt = stmt.where(Transaction.txn_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Transaction.txn_date <= date_to)
+
     rows = (await db.execute(stmt)).all()
     return [
         {
@@ -72,7 +81,9 @@ async def get_by_category(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     ]
 
 
-async def get_by_account(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+async def get_by_account(
+    db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
+) -> list[dict]:
     stmt = (
         select(
             Account.id,
@@ -84,10 +95,15 @@ async def get_by_account(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
         )
         .select_from(Transaction)
         .join(Account, Transaction.account_id == Account.id, isouter=True)
-        .where(Transaction.user_id == user_id)
+        .where(Transaction.user_id == user_id, Transaction.review_status.not_in(_DISMISSED_STATUSES))
         .group_by(Account.id, Account.display_name, Account.issuer_name, Account.last4)
         .order_by(func.sum(Transaction.amount).desc())
     )
+    if date_from is not None:
+        stmt = stmt.where(Transaction.txn_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Transaction.txn_date <= date_to)
+
     rows = (await db.execute(stmt)).all()
     results = []
     for row in rows:
@@ -106,7 +122,9 @@ async def get_by_account(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     return results
 
 
-async def get_by_bank(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+async def get_by_bank(
+    db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
+) -> list[dict]:
     stmt = (
         select(
             func.coalesce(Account.issuer_name, "Unknown").label("issuer_name"),
@@ -115,10 +133,15 @@ async def get_by_bank(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
         )
         .select_from(Transaction)
         .join(Account, Transaction.account_id == Account.id, isouter=True)
-        .where(Transaction.user_id == user_id)
+        .where(Transaction.user_id == user_id, Transaction.review_status.not_in(_DISMISSED_STATUSES))
         .group_by(Account.issuer_name)
         .order_by(func.sum(Transaction.amount).desc())
     )
+    if date_from is not None:
+        stmt = stmt.where(Transaction.txn_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Transaction.txn_date <= date_to)
+
     rows = (await db.execute(stmt)).all()
     return [
         {
@@ -143,7 +166,11 @@ async def get_trends(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
             ).label("total_spend"),
             func.count(Transaction.id).label("transaction_count"),
         )
-        .where(Transaction.user_id == user_id, Transaction.txn_date.is_not(None))
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.txn_date.is_not(None),
+            Transaction.review_status.not_in(_DISMISSED_STATUSES),
+        )
         .group_by(period)
         .order_by(period)
     )

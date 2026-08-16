@@ -12,7 +12,14 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str
     GOOGLE_REDIRECT_URI: str
 
-    ANTHROPIC_API_KEY: str
+    ANTHROPIC_API_KEY: str = ""
+
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3.1:8b"
+
+    # Providers users are allowed to select in Settings. First entry is the default
+    # for new users (also enforced by the users.llm_provider DB default).
+    AVAILABLE_LLM_PROVIDERS: list[str] = ["anthropic", "ollama"]
 
     # Phase 1 stand-in for Cloud KMS envelope encryption (see services/token_crypto.py).
     TOKEN_ENCRYPTION_KEY: str
@@ -32,6 +39,8 @@ class Settings(BaseSettings):
 
     SESSION_COOKIE_NAME: str = "moneyman_session"
     SESSION_MAX_AGE_SECONDS: int = 60 * 60 * 24 * 14
+
+    PULSAR_SERVICE_URL: str = "pulsar://localhost:6650"
 
 
 @lru_cache

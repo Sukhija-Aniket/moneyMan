@@ -33,6 +33,9 @@ export function AppLayout() {
               <NavLink to="/review" className={navLinkClass}>
                 Review Queue
               </NavLink>
+              <NavLink to="/sync" className={navLinkClass}>
+                Sync
+              </NavLink>
               <NavLink to="/settings" className={navLinkClass}>
                 Settings
               </NavLink>

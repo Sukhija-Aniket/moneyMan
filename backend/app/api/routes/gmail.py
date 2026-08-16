@@ -1,231 +1,136 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.db.models.account import Account
-from app.db.models.oauth_token import OAuthToken
-from app.db.models.raw_email import RawEmail
-from app.db.models.transaction import Transaction
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.config import get_settings
+from moneyman_shared.db.models.oauth_token import OAuthToken
+from moneyman_shared.db.models.raw_email import RawEmail
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
+from moneyman_shared.messaging.schemas import GmailSyncJob
+from moneyman_shared.services.gmail_sync import GmailSyncError, run_gmail_sync
+from moneyman_shared.services.user_time import today_for_user
 from app.deps import get_current_user
-from app.schemas.gmail import GmailStatus, GmailSyncResult
-from app.services import classification_service, extraction_service, gmail_client, google_oauth, token_crypto
-from app.services.gate1_filter import passes_gate1
+from app.schemas.gmail import GmailStatus, GmailSyncRequest, GmailSyncResult, GmailSyncTriggerOut
+from app.services import sync_trigger_service
+from app.services.sync_job_publisher import publish_sync_job
 
 router = APIRouter(prefix="/gmail", tags=["gmail"])
 settings = get_settings()
 
+MAX_SYNC_RANGE_DAYS = 92  # ~3 months
 
-async def _get_oauth_token(db: AsyncSession, user_id: uuid.UUID) -> OAuthToken:
-    result = await db.execute(select(OAuthToken).where(OAuthToken.user_id == user_id))
-    token = result.scalar_one_or_none()
-    if token is None:
+
+def _validate_sync_range(date_from: date | None, date_to: date | None, user_timezone: str) -> None:
+    if date_from is None and date_to is None:
+        return
+
+    if date_from is None or date_to is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No Gmail account connected. Sign in with Google first.",
+            detail="date_from and date_to must both be provided together.",
         )
-    return token
 
+    today = today_for_user(user_timezone)
 
-async def _get_or_create_account(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-    issuer_name: str | None,
-    last4: str | None,
-    account_type: str | None,
-) -> Account | None:
-    if not issuer_name and not last4:
-        return None
-
-    stmt = select(Account).where(
-        Account.user_id == user_id,
-        Account.issuer_name == issuer_name,
-        Account.last4 == last4,
-        Account.account_type == account_type,
-    )
-    result = await db.execute(stmt)
-    account = result.scalar_one_or_none()
-    if account is not None:
-        return account
-
-    account = Account(
-        user_id=user_id,
-        issuer_name=issuer_name,
-        last4=last4,
-        account_type=account_type,
-    )
-    db.add(account)
-    await db.flush()
-    return account
+    if date_from > today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"date_from ({date_from.isoformat()}) cannot be in the future.",
+        )
+    if date_to > today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"date_to ({date_to.isoformat()}) cannot be in the future.",
+        )
+    if date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"date_from ({date_from.isoformat()}) cannot be after date_to ({date_to.isoformat()}).",
+        )
+    if (date_to - date_from) > timedelta(days=MAX_SYNC_RANGE_DAYS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"date range cannot exceed {MAX_SYNC_RANGE_DAYS} days (~3 months).",
+        )
 
 
 @router.post("/sync", response_model=GmailSyncResult)
 async def sync_now(
+    sync_request: GmailSyncRequest = GmailSyncRequest(),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> GmailSyncResult:
-    oauth_token = await _get_oauth_token(db, current_user.id)
-
-    now = datetime.now(timezone.utc)
-    if oauth_token.token_expiry is not None and oauth_token.token_expiry <= now:
-        if not oauth_token.refresh_token_enc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Gmail access token expired and no refresh token is available. Sign in with Google again.",
-            )
-        refresh_token = token_crypto.decrypt(oauth_token.refresh_token_enc)
-        try:
-            refreshed = google_oauth.refresh_access_token(refresh_token)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to refresh Gmail access token: {exc}. Sign in with Google again.",
-            ) from exc
-
-        oauth_token.access_token_enc = token_crypto.encrypt(refreshed.access_token)
-        oauth_token.token_expiry = refreshed.token_expiry
-        await db.commit()
-
-    access_token = token_crypto.decrypt(oauth_token.access_token_enc)
-
-    counters = {
-        "fetched": 0,
-        "gate1_rejected": 0,
-        "classified_non_transaction": 0,
-        "extracted_accepted": 0,
-        "extracted_needs_review": 0,
-        "extracted_discarded": 0,
-        "extract_failed": 0,
-    }
+    """Plain sync (no date range): runs synchronously and returns the result — bounded to
+    GMAIL_SYNC_MAX_RESULTS messages, so this stays fast. For a date range, use
+    POST /gmail/sync/range instead, which runs asynchronously via the worker."""
+    _validate_sync_range(sync_request.date_from, sync_request.date_to, current_user.timezone)
 
     try:
-        message_ids = gmail_client.list_recent_message_ids(access_token, settings.GMAIL_SYNC_MAX_RESULTS)
-    except Exception as exc:  # Gmail API / auth failures surface as a clear 502
+        counters = await run_gmail_sync(db, current_user, sync_request.date_from, sync_request.date_to)
+    except GmailSyncError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    return GmailSyncResult(**counters.as_dict())
+
+
+@router.post("/sync/range", response_model=GmailSyncTriggerOut, status_code=status.HTTP_202_ACCEPTED)
+async def sync_range(
+    sync_request: GmailSyncRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GmailSyncTriggerOut:
+    """Starts an async range sync: validates the range, rejects if an overlapping range for
+    this user is already in progress, records a sync_triggers row, and publishes a job for
+    the worker to process. Returns immediately — poll GET /gmail/sync/triggers/{id} for status."""
+    if sync_request.date_from is None or sync_request.date_to is None:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to list Gmail messages: {exc}"
-        ) from exc
-
-    counters["fetched"] = len(message_ids)
-
-    for gmail_message_id in message_ids:
-        existing = await db.execute(
-            select(RawEmail).where(
-                RawEmail.user_id == current_user.id,
-                RawEmail.gmail_message_id == gmail_message_id,
-            )
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date_from and date_to are required for a range sync.",
         )
-        if existing.scalar_one_or_none() is not None:
-            continue
+    _validate_sync_range(sync_request.date_from, sync_request.date_to, current_user.timezone)
 
-        try:
-            message = gmail_client.get_message(access_token, gmail_message_id)
-        except Exception:
-            continue
-
-        raw_email = RawEmail(
-            user_id=current_user.id,
-            gmail_message_id=message.gmail_message_id,
-            history_id=message.history_id,
-            sender=message.sender,
-            subject=message.subject,
-            snippet=message.snippet,
-            body_text=message.body_text,
-            received_at=message.received_at,
-            classification="pending",
-        )
-        db.add(raw_email)
-        try:
-            await db.flush()
-        except IntegrityError:
-            await db.rollback()
-            continue
-
-        if not passes_gate1(message.subject, message.snippet):
-            raw_email.classification = "not_transaction"
-            counters["gate1_rejected"] += 1
-            await db.commit()
-            continue
-
-        stage_a = classification_service.classify_email(message.subject, message.sender, message.snippet)
-        if not stage_a.is_transaction_email:
-            raw_email.classification = "not_transaction"
-            counters["classified_non_transaction"] += 1
-            await db.commit()
-            continue
-
-        raw_email.classification = "candidate"
-        await db.commit()
-
-        try:
-            extraction = extraction_service.extract_transaction(
-                message.subject, message.sender, message.body_text
-            )
-        except Exception:
-            raw_email.classification = "extract_failed"
-            counters["extract_failed"] += 1
-            await db.commit()
-            continue
-
-        # Confidence handling per plan §4.2.
-        if not extraction.is_transaction or extraction.confidence < 0.5:
-            raw_email.classification = "not_transaction"
-            counters["extracted_discarded"] += 1
-            await db.commit()
-            continue
-
-        needs_review = extraction.confidence < 0.85 or extraction.amount is None
-
-        txn_date = None
-        if extraction.txn_date:
-            try:
-                txn_date = datetime.strptime(extraction.txn_date, "%Y-%m-%d").date()
-            except ValueError:
-                needs_review = True
-
-        account = await _get_or_create_account(
-            db,
-            current_user.id,
-            extraction.issuer_or_bank_name,
-            extraction.account_last4,
-            extraction.account_type,
+    overlapping = await sync_trigger_service.find_overlapping_in_progress(
+        db, current_user.id, sync_request.date_from, sync_request.date_to
+    )
+    if overlapping is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A sync for an overlapping range ({overlapping.date_from} to {overlapping.date_to}) "
+                "is already in progress."
+            ),
         )
 
-        transaction = Transaction(
-            user_id=current_user.id,
-            raw_email_id=raw_email.id,
-            account_id=account.id if account else None,
-            amount=extraction.amount or 0,
-            currency=extraction.currency or "USD",
-            txn_type=extraction.txn_type or "debit",
-            merchant_raw=extraction.merchant_or_counterparty,
-            merchant_normalized=extraction.merchant_or_counterparty,
-            txn_date=txn_date,
-            confidence_score=extraction.confidence,
-            needs_review=needs_review,
-            ambiguity_notes=extraction.ambiguity_notes,
-            extraction_raw_json=extraction.raw,
+    trigger = await sync_trigger_service.create_trigger(
+        db, current_user.id, sync_request.date_from, sync_request.date_to
+    )
+
+    publish_sync_job(
+        GmailSyncJob(
+            trigger_id=str(trigger.id),
+            user_id=str(current_user.id),
+            date_from=sync_request.date_from.isoformat(),
+            date_to=sync_request.date_to.isoformat(),
         )
-        db.add(transaction)
-        raw_email.classification = "extracted"
+    )
 
-        try:
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            continue
+    return trigger
 
-        if needs_review:
-            counters["extracted_needs_review"] += 1
-        else:
-            counters["extracted_accepted"] += 1
 
-    return GmailSyncResult(**counters)
+@router.get("/sync/triggers/{trigger_id}", response_model=GmailSyncTriggerOut)
+async def get_sync_trigger(
+    trigger_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GmailSyncTriggerOut:
+    trigger = await sync_trigger_service.get_trigger(db, current_user.id, uuid.UUID(trigger_id))
+    if trigger is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sync trigger not found.")
+    return trigger
 
 
 @router.get("/status", response_model=GmailStatus)
@@ -238,10 +143,19 @@ async def gmail_status(
     if token is None:
         return GmailStatus(connected=False)
 
+    range_result = await db.execute(
+        select(func.min(RawEmail.received_at), func.max(RawEmail.received_at)).where(
+            RawEmail.user_id == current_user.id
+        )
+    )
+    earliest, latest = range_result.one()
+
     return GmailStatus(
         connected=True,
         scope=token.scope,
         token_expiry=token.token_expiry.isoformat() if token.token_expiry else None,
+        earliest_synced_at=earliest.isoformat() if earliest else None,
+        latest_synced_at=latest.isoformat() if latest else None,
     )
 
 

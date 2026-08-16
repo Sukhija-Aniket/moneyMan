@@ -1,17 +1,18 @@
 import secrets
+from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.db.models.oauth_token import OAuthToken
-from app.db.models.user import User
-from app.db.session import get_db
+from moneyman_shared.config import get_settings
+from moneyman_shared.db.models.oauth_token import OAuthToken
+from moneyman_shared.db.models.user import User
+from moneyman_shared.db.session import get_db
 from app.deps import create_session_token, get_current_user
-from app.schemas.user import UserOut
-from app.services import google_oauth, token_crypto
+from app.schemas.user import UserOut, UserSettingsUpdate
+from moneyman_shared.services import google_oauth, token_crypto
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -129,4 +130,30 @@ async def logout(response: Response) -> dict:
 
 @router.get("/me", response_model=UserOut)
 async def me(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(
+    update: UserSettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    if update.llm_provider is not None:
+        if update.llm_provider not in settings.AVAILABLE_LLM_PROVIDERS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported llm_provider. Available: {settings.AVAILABLE_LLM_PROVIDERS}",
+            )
+        current_user.llm_provider = update.llm_provider
+
+    if update.timezone is not None:
+        if update.timezone not in available_timezones():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown timezone: {update.timezone!r}. Use an IANA timezone name, e.g. 'America/New_York'.",
+            )
+        current_user.timezone = update.timezone
+
+    await db.commit()
     return current_user

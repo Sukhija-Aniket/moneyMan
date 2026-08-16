@@ -1,6 +1,6 @@
 from cryptography.fernet import Fernet
 
-from app.config import get_settings
+from moneyman_shared.config import get_settings
 
 # Phase 1 stand-in: symmetric Fernet encryption keyed by a single env-var secret
 # (TOKEN_ENCRYPTION_KEY). The architecture plan specifies Cloud KMS envelope

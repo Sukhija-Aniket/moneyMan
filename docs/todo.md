@@ -49,6 +49,19 @@ or Phase 2/3 work not yet started.
       existing `gmail_watch_state` table (already created by the migration, unused so far).
 - [ ] Daily watch-renewal cron (watches expire silently after ~7 days) + hourly reconciliation
       sweep safety net.
+- [ ] **Make `POST /gmail/sync` async instead of a long-lived blocking request** (found while
+      testing a 39-day range sync — hundreds of emails classified/extracted serially against the
+      LLM inside one HTTP request, so the connection just hangs with no feedback for minutes):
+  - `POST /gmail/sync` returns immediately with a job id and `status: "in_progress"` instead of
+    blocking until the whole range is processed (needs the `arq`/Redis worker above, or at minimum
+    a `BackgroundTasks`/asyncio-task stopgap before that lands).
+  - A `sync_triggers` table (or similar) tracks each trigger: `date_from`, `date_to`, `status`
+    (`in_progress` / `success` / `failed`), `started_at`, `completed_at`, per-user.
+  - Before starting a new range sync, check `sync_triggers` for an overlapping in-progress trigger
+    for that user and reject/queue instead of double-processing the same range concurrently.
+  - Frontend polls (or subscribes via SSE/websocket) a status endpoint keyed by job id, shows
+    "in progress" while running, and flips to success/failure once the backend signals completion
+    — instead of the request itself hanging until done.
 
 ## Phase 3 (polish/hardening) — not started
 
@@ -60,7 +73,13 @@ or Phase 2/3 work not yet started.
       FX-normalized total).
 - [ ] Digest/multi-transaction emails — schema currently assumes one email → at most one
       transaction.
-- [ ] Duplicate transaction detection (e.g. "pending" vs "posted" emails for the same charge).
+- [x] Duplicate transaction detection (e.g. "pending" vs "posted" emails for the same charge) —
+      `shared/services/duplicate_detector.py`, wired into `gmail_sync.py`. Matches on same
+      account + currency + amount + txn_type + calendar day (deliberately same-account-only,
+      since cross-account same-amount/day matches are legitimate transfer legs, not duplicates
+      — see e.g. an Axis debit + HDFC-card-payment-received pair for one real bill payment).
+      Flags `needs_review` + notes the earlier transaction's id via
+      `transactions.duplicate_of_transaction_id`; never auto-merges/deletes.
 - [ ] Account/issuer entity resolution (fuzzy-match "Chase Sapphire" vs "CHASE CREDIT CARD" etc.
       to avoid duplicate `accounts` rows).
 - [ ] User-editable `category_rules` for auto-categorization.

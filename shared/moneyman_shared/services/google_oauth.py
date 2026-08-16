@@ -7,7 +7,7 @@ import google.oauth2.credentials
 import google.oauth2.id_token
 from google_auth_oauthlib.flow import Flow
 
-from app.config import get_settings
+from moneyman_shared.config import get_settings
 
 # Google may grant a narrower scope set than requested (e.g. a restricted scope like
 # gmail.readonly gets silently dropped if consent-screen propagation hasn't caught up yet).

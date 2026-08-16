@@ -2,22 +2,29 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from moneyman_shared.db.base import Base
+from moneyman_shared.db.models.review_status import REVIEW_STATUSES, ReviewStatus
 
 if TYPE_CHECKING:
-    from app.db.models.account import Account
-    from app.db.models.category import Category
-    from app.db.models.raw_email import RawEmail
-    from app.db.models.user import User
+    from moneyman_shared.db.models.account import Account
+    from moneyman_shared.db.models.category import Category
+    from moneyman_shared.db.models.raw_email import RawEmail
+    from moneyman_shared.db.models.user import User
 
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (UniqueConstraint("user_id", "raw_email_id", name="uq_transactions_user_raw_email"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "raw_email_id", name="uq_transactions_user_raw_email"),
+        CheckConstraint(
+            f"review_status IN ({', '.join(repr(s) for s in REVIEW_STATUSES)})",
+            name="ck_transactions_review_status",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -32,6 +39,9 @@ class Transaction(Base):
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    duplicate_of_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
@@ -43,7 +53,7 @@ class Transaction(Base):
     txn_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     confidence_score: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
-    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    review_status: Mapped[ReviewStatus] = mapped_column(String, nullable=False, default="pending", index=True)
     ambiguity_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     extraction_raw_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

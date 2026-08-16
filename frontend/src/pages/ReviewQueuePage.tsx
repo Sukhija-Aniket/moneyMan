@@ -8,7 +8,7 @@ const DEFAULT_PAGE_SIZE = 25;
 
 export function ReviewQueuePage() {
   const [filters, setFilters] = useState<TransactionFilters>({
-    needs_review: true,
+    review_status: "pending",
     page: 1,
     page_size: DEFAULT_PAGE_SIZE,
     sort: "-txn_date",
@@ -21,8 +21,8 @@ export function ReviewQueuePage() {
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Review Queue</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Low-confidence extractions that need a quick check. Edit the merchant or
-          category directly in the table below.
+          Low-confidence extractions that need a quick check. Confirm, mark as not a
+          transaction, or mark as a duplicate — nothing here is deleted.
         </p>
       </div>
 
@@ -40,7 +40,7 @@ export function ReviewQueuePage() {
               Nothing needs review right now.
             </div>
           ) : (
-            <TransactionTable transactions={data.items} />
+            <TransactionTable transactions={data.items} mode="review" />
           )}
           <Pagination
             page={data.page}
