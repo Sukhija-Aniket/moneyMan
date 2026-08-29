@@ -5,17 +5,6 @@ export interface SyncRange {
   date_to: string;
 }
 
-export interface SyncResult {
-  fetched: number;
-  gate1_rejected: number;
-  classify_failed: number;
-  classified_non_transaction: number;
-  extracted_accepted: number;
-  extracted_needs_review: number;
-  extracted_discarded: number;
-  extract_failed: number;
-}
-
 export interface GmailStatus {
   connected: boolean;
   scope: string | null;
@@ -24,7 +13,7 @@ export interface GmailStatus {
   latest_synced_at: string | null;
 }
 
-export type SyncSegmentStatus = "in_progress" | "success" | "failed";
+export type SyncSegmentStatus = "in_progress" | "extraction_complete" | "extraction_failed" | "failed";
 export type SyncRequestStatus = "in_progress" | "success" | "partial_failure" | "failed";
 
 export interface SyncSegment {
@@ -55,8 +44,11 @@ export interface CurrentSync {
   date_to: string | null;
 }
 
-export async function triggerSync(range?: SyncRange): Promise<SyncResult> {
-  return apiFetch<SyncResult>("/gmail/sync", { method: "POST", body: range ?? {} });
+export interface SyncRequestListResponse {
+  items: SyncRequestOut[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /** Starts an async range sync (runs on the worker) — returns immediately with the created
@@ -67,6 +59,12 @@ export async function triggerRangeSync(range: SyncRange): Promise<SyncRequestOut
 
 export async function getSyncRequest(requestId: string): Promise<SyncRequestOut> {
   return apiFetch<SyncRequestOut>(`/gmail/sync/requests/${requestId}`);
+}
+
+export async function listSyncRequests(
+  params: { limit?: number; offset?: number } = {},
+): Promise<SyncRequestListResponse> {
+  return apiFetch<SyncRequestListResponse>("/gmail/sync/requests", { params });
 }
 
 export async function getCurrentSync(): Promise<CurrentSync> {

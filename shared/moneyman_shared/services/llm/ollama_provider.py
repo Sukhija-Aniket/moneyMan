@@ -10,6 +10,27 @@ from moneyman_shared.services.llm.tools import (
 )
 
 
+def _as_float(value: object, default: float) -> float:
+    """Small local models occasionally emit the literal string "null" (or other
+    non-numeric junk) for a numeric tool-call argument instead of JSON null or a real
+    number — coerce defensively rather than letting garbage reach a Numeric DB column."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _as_ollama_tool(tool: dict) -> dict:
     return {
         "type": "function",
@@ -80,7 +101,7 @@ class OllamaProvider:
 
         return ClassificationResult(
             is_transaction_email=bool(data.get("is_transaction_email", False)),
-            confidence=float(data.get("confidence", 0.0)),
+            confidence=_as_float(data.get("confidence"), 0.0),
             reason=str(data.get("reason", "")),
         )
 
@@ -109,7 +130,7 @@ class OllamaProvider:
 
         return ExtractionResult(
             is_transaction=bool(data.get("is_transaction", False)),
-            amount=data.get("amount"),
+            amount=_as_optional_float(data.get("amount")),
             currency=data.get("currency"),
             txn_type=data.get("txn_type"),
             merchant_or_counterparty=data.get("merchant_or_counterparty"),
@@ -118,7 +139,7 @@ class OllamaProvider:
             issuer_or_bank_name=data.get("issuer_or_bank_name"),
             account_type=data.get("account_type"),
             category_hint=data.get("category_hint"),
-            confidence=float(data.get("confidence", 0.0)),
+            confidence=_as_float(data.get("confidence"), 0.0),
             ambiguity_notes=data.get("ambiguity_notes"),
             raw=data,
         )

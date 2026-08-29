@@ -2,8 +2,9 @@
 
 ## Context
 
-A sync request (plain "Sync now" or an explicit `[date_from, date_to]` range)
-fetches Gmail messages in that range, and for each one runs classification +
+A sync request (an explicit `[date_from, date_to]` range — the earlier plain
+"Sync now", most-recent-N-messages mode has been removed) fetches Gmail
+messages in that range, and for each one runs classification +
 extraction to produce a `Transaction`. This must not block the HTTP request
 that triggers it — a wide date range means hundreds of emails run serially
 against the LLM, which can take minutes. The backend must stay lightweight:
@@ -42,66 +43,98 @@ segment) can ever be, so one Gmail `list` + pagination call per segment is
 bounded enough on its own; an additional internal chunking step inside the
 fetch stage would add complexity without a problem left to solve.
 
-## Sync coverage: `synced_ranges`
+## Sync coverage: `fetched_ranges` and `synced_ranges`
 
-A new table tracks, per user, which date ranges have been **fully**
-synced — i.e. every candidate email in that range has reached a terminal
-extraction outcome.
+Two coverage tables, tracking two genuinely different things — conflating
+them was an earlier design/implementation mistake (a range that fetched
+successfully but whose extraction entirely failed against a bad LLM
+provider config got merged into a single "synced" table, permanently
+hiding those emails from ever being retried, since a later sync request
+saw zero gaps and never touched Gmail or those raw_emails rows again):
+
+- **`fetched_ranges`** (shared — Worker 1 writes this directly, not just
+  the backend): which date ranges have already had their Gmail messages
+  **listed and written to `raw_emails`**, regardless of what later happened
+  during classification/extraction. Gmail's `list`/`get_message` calls are
+  the expensive, rate-limited part of this pipeline — once a range is in
+  here, Worker 1 never calls Gmail for it again, even on a retry driven by
+  `classify_failed`/`extract_failed` rows.
+- **`synced_ranges`** (backend-owned): which date ranges are **fully**
+  done — every candidate email reached a genuine verdict (`extracted` or
+  `not_transaction`). Only this table feeds the backend's gap computation
+  for `POST /gmail/sync/range` — a range with real extraction failures
+  stays a "gap" here (and gets recomputed as such on a future request) even
+  though it's fully covered in `fetched_ranges`.
+
+Both tables have the identical shape and gap-computation/merge logic
+(`moneyman_shared.services.coverage`, used by both the worker and the
+backend against their respective table):
 
 ```
-synced_ranges
+fetched_ranges / synced_ranges
   id          uuid primary key
   user_id     uuid, fk users, indexed
   date_from   date
   date_to     date
 ```
 
-A row is inserted only when a segment (see below) completes successfully.
-Rows start out **disjoint but not merged** — e.g. syncing `[20,50]` then
-`[54,70]` leaves two rows; a later request for `[40,60]` diffs against both
-and finds `[51,53]` as the only gap (day 50→54 gap, intersected with the
-query range). Gap computation always diffs against the full row set for the
-user, so correctness never depends on rows being merged — but the row count
-per user grows unboundedly with repeated small syncs, so merging is a
-required maintenance step, not optional cleanup (see "Merging synced_ranges"
-below).
+A `fetched_ranges` row is inserted by Worker 1 the moment a segment's fetch
+(listing + Gate 1 + `raw_emails` write) completes — independent of
+extraction outcome. A `synced_ranges` row is inserted by the backend only
+when a segment's `GmailSyncFetchEvent` reports `status="extraction_complete"`
+(see "Stage 1: Fetch" and the `GmailSyncFetchEvent` schema below). Rows in
+either table start out **disjoint but not merged** — e.g. syncing `[20,50]`
+then `[54,70]` leaves two rows; a later request for `[40,60]` diffs against
+both and finds `[51,53]` as the only gap (day 50→54 gap, intersected with
+the query range). Gap computation always diffs against the full row set for
+the user, so correctness never depends on rows being merged — but the row
+count per user grows unboundedly with repeated small syncs, so merging is a
+required maintenance step, not optional cleanup (see "Merging coverage
+ranges" below).
 
-**Gap computation** (`date_from, date_to, user_id` → `list[(date_from, date_to)]`):
+**Gap computation** (`date_from, date_to, user_id, table` → `list[(date_from, date_to)]`) —
+identical algorithm against either table:
 
-1. Load all `synced_ranges` rows for the user overlapping the requested
-   range.
+1. Load all rows of the table for the user overlapping the requested range.
 2. Sort by `date_from`, merge any that touch/overlap into a coalesced
-   "already synced" interval list.
+   "already covered" interval list.
 3. Subtract the coalesced list from the requested range → the remaining
-   pieces are the gap segments to actually sync. Zero gaps means the whole
-   request is already covered — respond success immediately, no job
-   published.
+   pieces are the gaps. Zero gaps means the whole request is already
+   covered by that table.
 
-## Merging `synced_ranges`
+## Merging coverage ranges
 
-Two points where merging matters, handled differently:
+Two points where merging matters, handled identically for both
+`fetched_ranges` and `synced_ranges`:
 
 - **On insert (eager, required for correctness of adjacency, not just
-  tidiness)**: when a segment succeeds and its `[date_from, date_to]` is
-  about to be inserted, first check for existing rows that touch or overlap
-  it (`existing.date_to >= new.date_from - 1 day` and
+  tidiness)**: when a row is about to be inserted, first check for existing
+  rows of the same table that touch or overlap it
+  (`existing.date_to >= new.date_from - 1 day` and
   `existing.date_from <= new.date_to + 1 day`). If any are found, delete
   them and insert a single row spanning the union instead of adding a third
   disjoint row. Continuing the running example: `[20,50]` and `[54,70]`
-  already exist; the `[51,53]` segment succeeds; since `50` and `54` are
-  each within 1 day of `51`/`53`, all three collapse into one `[20,70]` row.
-  This is a normal part of handling a successful segment, not a separate
-  job — it keeps the common "fill in a gap" case from ever fragmenting.
+  already exist; a `[51,53]` insert arrives; since `50` and `54` are each
+  within 1 day of `51`/`53`, all three collapse into one `[20,70]` row. This
+  is a normal part of handling the insert, not a separate job — it keeps
+  the common "fill in a gap" case from ever fragmenting.
 - **Periodic compaction (best-effort maintenance)**: even with eager
   merge-on-insert, concurrent segments from different in-flight requests
   can each insert a row that turns out to be adjacent to another only after
   both land (a race the eager step alone can't fully close). A periodic job
-  (e.g. hourly, per user or globally) re-scans `synced_ranges`, merges any
-  rows that touch/overlap, and replaces them with their union. This is pure
-  cleanup — gap computation is correct against an unmerged row set too — but
-  keeps row counts from growing unboundedly for users who sync often in
+  (e.g. hourly, per user or globally) re-scans each table, merges any rows
+  that touch/overlap, and replaces them with their union. This is pure
+  cleanup — gap computation is correct against an unmerged row set too —
+  but keeps row counts from growing unboundedly for users who sync often in
   small increments.
-  Note: Merging Periodic or in insert can happen only for `Success` scenario. In progress / failed etc are ignored for better debuggability and correctness.
+
+Only a genuinely successful outcome ever gets merge-inserted into either
+table — `fetched_ranges` only from a fetch that didn't error outright,
+`synced_ranges` only from `status="extraction_complete"`. `in_progress`,
+`failed`, and `extraction_failed` segments insert nothing into
+`synced_ranges` (though `extraction_failed` still inserts into
+`fetched_ranges`), for debuggability and correctness — see the
+`GmailSyncFetchEvent` schema below for the full status semantics.
 
 ## Segment tracking: `sync_requests` + `sync_segments`
 
@@ -139,7 +172,7 @@ sync_segments
   for exactly that segment's `[date_from, date_to]`. Failed segments insert
   nothing — so a later request covering the same dates naturally computes
   them as still a gap and retries them. No separate retry mechanism is
-  needed; "click Sync now again for the same range" is the retry path.
+  needed; re-running "Sync range" for the same dates is the retry path.
 
 **In-progress overlap check**: before computing gaps, reject (409) if any
 `sync_segments` row for this user with `status="in_progress"` overlaps the
@@ -213,9 +246,7 @@ Request:
 { "date_from": "2026-07-01", "date_to": "2026-08-01" }
 ```
 
-`date_from`/`date_to` are both optional — omitting both means a plain
-"Sync now" (most recent N messages; skips validation and gap computation
-entirely, same as today).
+`date_from`/`date_to` are both required.
 
 Validation (range given):
 
@@ -292,7 +323,7 @@ Poll a request's aggregate status plus its per-segment breakdown.
 ### `GET /gmail/sync/current`
 
 Convenience lookup for the frontend: does this user have any segment
-`in_progress` right now? Used to disable/hide "Sync now" and show a
+`in_progress` right now? Used to disable/hide "Sync range" and show a
 progress indicator without the frontend having to track a `request_id`
 across page loads.
 
@@ -305,8 +336,7 @@ across page loads.
 ```python
 class GmailSyncJob(BaseModel):
     """Published by the backend to GMAIL_SYNC_JOBS_TOPIC, one per gap
-    segment; consumed by the worker's fetch stage. date_from/date_to are
-    omitted only for a plain "Sync now" (most recent N messages)."""
+    segment; consumed by the worker's fetch stage."""
     segment_id: str
     user_id: str
     date_from: str | None = None  # ISO date
@@ -338,9 +368,31 @@ class GmailSyncFetchEvent(BaseModel):
     GMAIL_SYNC_FETCH_EVENTS_TOPIC — either immediately on a whole-segment
     fetch failure, or after every EmailExtractionEvent for this segment's
     candidates has been received. Consumed by the backend to mark the
-    segment terminal and, on success, insert its synced_ranges row."""
+    segment terminal and merge-insert into fetched_ranges/synced_ranges as
+    appropriate.
+
+    status is a 3-state outcome, not a flat success/failed pair:
+      "failed"              - the fetch itself failed outright (Gmail API
+                               error, user not found). Nothing usable was
+                               written — no fetched_ranges or synced_ranges
+                               entry for this segment's range.
+      "extraction_failed"   - fetch succeeded (raw_emails were written —
+                               Worker 1 already merged this range into
+                               fetched_ranges directly, so Gmail is never
+                               re-listed for these dates), but at least one
+                               candidate ended in classify_failed/
+                               extract_failed. Those are transient LLM-call
+                               failures, not verdicts (see extract_one_email)
+                               — this range must NOT be merged into
+                               synced_ranges, so a later sync request still
+                               picks these emails up for reclassification.
+      "extraction_complete" - fetch succeeded AND every candidate reached a
+                               genuine verdict (extracted/not_transaction).
+                               The backend merges this range into
+                               synced_ranges.
+    """
     segment_id: str
-    status: str  # "success" | "failed"
+    status: str  # "failed" | "extraction_failed" | "extraction_complete"
     fetched: int = 0
     gate1_rejected: int = 0
     total_candidates: int = 0
@@ -378,35 +430,52 @@ reaches the backend.
 On a `GmailSyncJob` (one per segment):
 
 1. Look up the user; refresh the OAuth token if expired.
-2. List Gmail message ids for the segment's `[date_from, date_to]` in one
-   call (paginating as needed) — `MAX_SYNC_RANGE_DAYS` keeps this bounded,
-   so no further internal splitting is needed. A plain "Sync now" lists the
-   most recent N messages instead.
-3. For each message id: skip if a `raw_emails` row already exists with a
-   terminal classification for it; otherwise fetch the full message, run
-   Gate 1, and write a `raw_emails` row (`classification="pending"` if it
-   passes Gate 1, `"not_transaction"` if Gate 1 rejects it).
+2. **`fetched_ranges` pre-check**: if `[date_from, date_to]` is fully
+   covered by `fetched_ranges` already, skip straight to step 3.5 below —
+   Gmail's `list`/`get_message` calls are the expensive, rate-limited part
+   of this pipeline, and a range that's already been fetched must never pay
+   that cost again just because some of its candidates later failed
+   classification/extraction.
+3. Otherwise, list Gmail message ids for the segment's `[date_from,
+   date_to]` in one call (paginating as needed) — `MAX_SYNC_RANGE_DAYS`
+   keeps this bounded, so no further internal splitting is needed. For each
+   message id: skip if a `raw_emails` row already exists with a genuine-verdict
+   classification for it; otherwise fetch the full message, run Gate 1, and
+   write a `raw_emails` row (`classification="pending"` if it passes Gate
+   1, `"not_transaction"` if Gate 1 rejects it). Once done, merge-insert
+   `[date_from, date_to]` into `fetched_ranges` — regardless of what
+   extraction later does with these candidates.
+3.5. Derive the candidate list: either the ids just written/re-queued in
+   step 3, or (if step 2 skipped Gmail entirely) every existing `raw_emails`
+   row in this date range whose classification isn't yet a genuine verdict
+   (`pending`/`candidate`/`classify_failed`/`extract_failed`).
 4. Record, in memory/local state keyed by `segment_id`, the expected count
-   of candidates (rows that passed Gate 1) — this is `total_candidates` for
-   the segment.
+   of candidates — this is `total_candidates` for the segment.
 5. For every candidate, publish one
    `EmailExtractionJob{segment_id, user_id, raw_email_id}`.
 6. As `EmailExtractionEvent`s arrive back (from Worker 2) for this
    `segment_id`, track how many of `total_candidates` have settled. Once
    every candidate has a terminal event (or immediately, if
    `total_candidates == 0`), publish one `GmailSyncFetchEvent{segment_id,
-   status="success", ...aggregated counters}`.
+   ...aggregated counters}` — `status="extraction_complete"` only if none
+   of the candidates ended in `classify_failed`/`extract_failed`;
+   `status="extraction_failed"` otherwise, even though every candidate did
+   reach a terminal outcome (see the `GmailSyncFetchEvent` docstring above
+   for why — this only affects `synced_ranges`, not `fetched_ranges`,
+   which is already covered as of step 3).
 7. Ack the originating `GmailSyncJob` only once its `GmailSyncFetchEvent`
    has been published. On a crash mid-segment, Pulsar redelivers the whole
-   `GmailSyncJob` — safe to reprocess because `raw_emails` writes are
-   dedupe-checked (step 3) and republishing an `EmailExtractionJob` for an
-   already-terminal email is a no-op downstream (Stage 2 is idempotent per
-   `raw_email_id`).
+   `GmailSyncJob` — safe to reprocess because both `raw_emails` writes
+   (step 3) and `fetched_ranges` merge-inserts (idempotent — merging the
+   same range twice is a no-op) are dedupe-checked, and republishing an
+   `EmailExtractionJob` for an already-terminal email is a no-op downstream
+   (Stage 2 is idempotent per `raw_email_id`).
 
 If listing/fetching from Gmail fails outright for the whole segment (not a
 single message), publish `GmailSyncFetchEvent{status="failed", error,
 total_candidates=0}` immediately instead of waiting on extraction events
-that will never be published.
+that will never be published — nothing is merged into `fetched_ranges`
+either, since nothing was actually fetched.
 
 Tracking per-segment in-flight counts (step 4/6) needs to survive a Worker 1
 restart — persist it (e.g. a small `segment_id → total_candidates` +
@@ -443,20 +512,28 @@ second insert, so at worst there's a harmless re-classification.
   `sync_requests`/`sync_segments` → publish one `GmailSyncJob` per segment
   → respond immediately (see API section above).
 - Consume `GMAIL_SYNC_FETCH_EVENTS_TOPIC`: mark the corresponding
-  `sync_segments` row `success` or `failed`; on `success`, merge-insert a
-  `synced_ranges` row for that segment's exact `[date_from, date_to]` (see
-  "Merging synced_ranges"). Once every segment under a `sync_requests` row
-  is terminal, derive and set the parent's `status` (`success` /
-  `partial_failure` / `failed`).
-- Run the periodic `synced_ranges` compaction job (see "Merging
-  synced_ranges") so per-user row counts stay bounded over time.
+  `sync_segments` row with the reported status (`failed` /
+  `extraction_failed` / `extraction_complete`); only on
+  `extraction_complete`, merge-insert a `synced_ranges` row for that
+  segment's exact `[date_from, date_to]` (see "Merging coverage ranges") —
+  note `fetched_ranges` is merge-inserted by the worker directly, not here.
+  Once every segment under a `sync_requests` row is terminal, derive and
+  set the parent's `status` (`success` if every segment is
+  `extraction_complete`, `failed` if every segment is `failed`,
+  `partial_failure` otherwise — which covers both a genuine mix and the
+  "fetched fine, some emails still need reclassification" case).
+- Run the periodic `fetched_ranges`/`synced_ranges` compaction job (see
+  "Merging coverage ranges") so per-user row counts stay bounded over time.
 - Serve `GET /gmail/sync/{request_id}` and `GET /gmail/sync/current` so the
   frontend can poll status and block a second concurrent sync from the UI
   side too (in addition to the backend's own overlap check).
-- Failed segments are **not** retried automatically — they simply aren't
-  written to `synced_ranges`, so the next `POST /gmail/sync` covering those
-  dates naturally recomputes them as a gap and retries them. No separate
-  retry/backoff mechanism.
+- Segments that aren't `extraction_complete` are **not** retried
+  automatically — they simply aren't written to `synced_ranges`, so the
+  next `POST /gmail/sync` covering those dates naturally recomputes them as
+  a gap and retries them. No separate retry/backoff mechanism. Critically,
+  this retry is cheap for an `extraction_failed` segment: `fetched_ranges`
+  already covers it, so Worker 1 skips Gmail entirely and goes straight to
+  re-dispatching extraction for the still-non-terminal `raw_emails` rows.
 
 ## Open questions
 

@@ -37,10 +37,26 @@ class GmailSyncFetchEvent(BaseModel):
     """Published once per segment by the fetch stage to GMAIL_SYNC_FETCH_EVENTS_TOPIC —
     either immediately on a whole-segment fetch failure, or after every EmailExtractionEvent
     for this segment's candidates has been received. Consumed by the backend to mark the
-    segment terminal and, on success, merge-insert its synced_ranges row."""
+    segment terminal and merge-insert into fetched_ranges/synced_ranges as appropriate.
+
+    status is a 3-state outcome, not a flat success/failed pair:
+      "failed"              - the fetch itself failed outright (Gmail API error, user not
+                               found). Nothing usable was written — no fetched_ranges or
+                               synced_ranges entry for this segment's range.
+      "extraction_failed"   - fetch succeeded (raw_emails were written — merge into
+                               fetched_ranges so Gmail is never re-listed for these dates),
+                               but at least one candidate ended in classify_failed/
+                               extract_failed. Those are transient LLM-call failures, not
+                               verdicts, so this range must NOT be merged into synced_ranges
+                               — a later sync request should still pick these emails up for
+                               reclassification.
+      "extraction_complete" - fetch succeeded AND every candidate reached a genuine verdict
+                               (extracted/not_transaction). Merge into both fetched_ranges
+                               and synced_ranges.
+    """
 
     segment_id: str
-    status: str  # "success" | "failed"
+    status: str  # "failed" | "extraction_failed" | "extraction_complete"
     fetched: int = 0
     gate1_rejected: int = 0
     total_candidates: int = 0

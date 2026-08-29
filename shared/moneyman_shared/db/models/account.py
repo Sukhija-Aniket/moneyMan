@@ -16,7 +16,12 @@ if TYPE_CHECKING:
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (
-        UniqueConstraint("user_id", "issuer_name", "last4", "account_type", name="uq_accounts_user_issuer_last4_type"),
+        # Grouped by last4 alone (not issuer_name/account_type, both LLM-extracted and
+        # inconsistent across emails for the same real account — e.g. "Axis Bank" vs "Axis
+        # Bank Ltd.", debit_card vs credit_card for the same card) — see
+        # _get_or_create_account in shared/services/gmail_sync.py. last4 collisions across
+        # genuinely different accounts are possible but rare; accepted tradeoff for now.
+        UniqueConstraint("user_id", "last4", name="uq_accounts_user_last4"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

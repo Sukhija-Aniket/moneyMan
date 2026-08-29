@@ -39,6 +39,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://moneyman:moneyman@postgres:5432/moneyman
       PULSAR_SERVICE_URL: pulsar://pulsar:6650
+      # .env's OLLAMA_BASE_URL (localhost:11434) means "this container" inside Docker, not
+      # the host machine running `ollama serve` — host.docker.internal is Docker's DNS name
+      # for the host, resolved via extra_hosts below (needed on Linux; OrbStack/Docker
+      # Desktop provide it automatically, but the mapping is harmless there too).
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     depends_on:
@@ -56,6 +63,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://moneyman:moneyman@postgres:5432/moneyman
       PULSAR_SERVICE_URL: pulsar://pulsar:6650
+      # See backend's OLLAMA_BASE_URL comment above — same host-networking issue applies
+      # here since the worker's extraction stage is what actually calls Ollama.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,9 +82,13 @@ services:
       VITE_API_BASE_URL: http://localhost:8000
     ports:
       - "5173:5173"
+    volumes:
+      - ../frontend:/app
+      - frontend-node-modules:/app/node_modules
     depends_on:
       - backend
 
 volumes:
   postgres-data:
   pulsar-data:
+  frontend-node-modules:

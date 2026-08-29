@@ -4,28 +4,67 @@ export type TxnType = "debit" | "credit";
 
 export type ReviewStatus = "pending" | "confirmed" | "not_transaction" | "duplicate";
 
+export type ReviewedBy = "system" | "human";
+
+export interface RawEmail {
+  id: string;
+  gmail_message_id: string;
+  sender: string | null;
+  subject: string | null;
+  snippet: string | null;
+  body_text: string | null;
+  received_at: string | null;
+}
+
+export interface TransactionCategory {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  is_system: boolean;
+}
+
+export interface TransactionAccount {
+  id: string;
+  issuer_name: string | null;
+  last4: string | null;
+  account_type: string | null;
+  display_name: string | null;
+}
+
 export interface Transaction {
   id: string;
   amount: number;
   currency: string;
   txn_type: TxnType;
   merchant_normalized: string;
-  category_id: string | null;
-  category_name: string | null;
-  account_id: string;
-  account_display_name: string;
+  category: TransactionCategory | null;
+  account: TransactionAccount | null;
   txn_date: string;
   confidence_score: number;
   review_status: ReviewStatus;
+  reviewed_by: ReviewedBy | null;
   duplicate_of_transaction_id: string | null;
   ambiguity_notes: string | null;
+  /** Lightweight — the full raw email (with body) is fetched separately, on demand, via
+   * getTransactionRawEmail(id), so list/table views don't ship every row's email body. */
+  raw_email_gmail_message_id: string | null;
+}
+
+/** account.display_name is only set if the user renamed it — falls back to
+ * "<issuer> ••<last4>" (or whichever of those two parts is available) to match how a bank
+ * account is normally identified. */
+export function accountDisplayName(account: TransactionAccount | null): string {
+  if (!account) return "—";
+  if (account.display_name) return account.display_name;
+  if (account.issuer_name && account.last4) return `${account.issuer_name} ••${account.last4}`;
+  return account.issuer_name ?? (account.last4 ? `••${account.last4}` : "—");
 }
 
 export interface TransactionListResponse {
   items: Transaction[];
   total: number;
-  page: number;
-  page_size: number;
+  limit: number;
+  offset: number;
 }
 
 export interface TransactionFilters {
@@ -34,14 +73,13 @@ export interface TransactionFilters {
   category_id?: string;
   account_id?: string;
   txn_type?: TxnType;
-  min_amount?: number;
-  max_amount?: number;
+  amount_min?: number;
+  amount_max?: number;
   search?: string;
   review_status?: ReviewStatus;
   include_dismissed?: boolean;
-  page?: number;
-  page_size?: number;
-  sort?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface TransactionUpdate {
@@ -59,6 +97,10 @@ export async function listTransactions(
 
 export async function getTransaction(id: string): Promise<Transaction> {
   return apiFetch<Transaction>(`/transactions/${id}`);
+}
+
+export async function getTransactionRawEmail(id: string): Promise<RawEmail> {
+  return apiFetch<RawEmail>(`/transactions/${id}/raw-email`);
 }
 
 export async function updateTransaction(

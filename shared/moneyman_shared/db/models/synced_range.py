@@ -7,11 +7,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from moneyman_shared.db.base import Base
 
-# Backend-owned: coverage ledger of date ranges that have been FULLY synced for a user (every
-# candidate email in the range reached a terminal extraction outcome). Rows are inserted only
-# when a sync_segments row succeeds, and are merge-inserted (see sync_coverage_service) rather
-# than accumulated as many small disjoint rows — but gap computation is correct against an
-# unmerged row set too, so a merge is a maintenance optimization, not a correctness requirement.
+# Coverage ledger of date ranges FULLY synced for a user — i.e. every candidate email in the
+# range reached a genuine verdict (extracted or not_transaction), not just a terminal outcome
+# (classify_failed/extract_failed are terminal but not genuine verdicts — see
+# moneyman_shared.services.gmail_sync.extract_one_email). Only the backend writes rows here
+# (on a segment's status="extraction_complete"), but the model lives in shared alongside
+# fetched_ranges since both use the same generic coverage/gap-computation logic
+# (moneyman_shared.services.coverage). See fetched_range.py for the weaker "fetch alone
+# done" coverage this table is NOT tracking.
 
 
 class SyncedRange(Base):

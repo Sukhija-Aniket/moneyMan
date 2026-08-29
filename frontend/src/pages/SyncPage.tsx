@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { ApiError } from "../api/client";
 import { DateRangePicker, DateRange } from "../components/DateRangePicker";
-import { useGmailStatus, useGmailSync, useStartRangeSync, useSyncRequestStatus } from "../hooks/useGmailSync";
+import {
+  useCurrentSync,
+  useGmailStatus,
+  useStartRangeSync,
+  useSyncHistory,
+  useSyncRequestStatus,
+} from "../hooks/useGmailSync";
+import { SyncRequestOut, SyncRequestStatus } from "../api/endpoints/gmail";
 import {
   useAddBlacklistedSender,
   useBlacklistedSenders,
@@ -14,14 +21,55 @@ function errorMessage(err: Error | null): string | null {
   return err instanceof ApiError ? err.detail : "Sync failed. Please try again.";
 }
 
+const REQUEST_STATUS_BADGE: Record<SyncRequestStatus, { label: string; className: string }> = {
+  in_progress: { label: "In progress", className: "bg-blue-100 text-blue-700" },
+  success: { label: "Success", className: "bg-green-100 text-green-700" },
+  partial_failure: { label: "Partial failure", className: "bg-amber-100 text-amber-800" },
+  failed: { label: "Failed", className: "bg-red-100 text-red-700" },
+};
+
+function SyncHistoryRow({ request }: { request: SyncRequestOut }) {
+  const badge = REQUEST_STATUS_BADGE[request.status];
+  return (
+    <li className="py-2 text-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-gray-700">
+          {request.date_from} to {request.date_to}
+        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">{new Date(request.created_at).toLocaleString()}</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
+            {badge.label}
+          </span>
+        </div>
+      </div>
+      {request.segments.length > 0 && (
+        <ul className="ml-4 mt-1 list-disc text-xs text-gray-500">
+          {request.segments.map((segment) => (
+            <li key={segment.id}>
+              {segment.date_from} to {segment.date_to}: {segment.status}
+              {segment.total_candidates !== null &&
+                ` (${segment.processed_candidates}/${segment.total_candidates})`}
+              {(segment.status === "failed" || segment.status === "extraction_failed") && segment.error
+                ? ` — ${segment.error}`
+                : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 export function SyncPage() {
   const { data: status, isLoading } = useGmailStatus();
-  const sync = useGmailSync();
   const [range, setRange] = useState<DateRange>(currentMonthRange());
 
   const startRangeSync = useStartRangeSync();
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const requestStatus = useSyncRequestStatus(activeRequestId);
+  const currentSync = useCurrentSync();
+  const syncHistory = useSyncHistory({ limit: 20 });
 
   const { data: blacklist } = useBlacklistedSenders();
   const addBlacklisted = useAddBlacklistedSender();
@@ -37,10 +85,15 @@ export function SyncPage() {
   function handleSyncRange() {
     startRangeSync.mutate(range, {
       onSuccess: (request) => setActiveRequestId(request.id),
+      onSettled: () => {
+        currentSync.refetch();
+        syncHistory.refetch();
+      },
     });
   }
 
-  const rangeSyncInProgress = requestStatus.data?.status === "in_progress";
+  const rangeSyncInProgress =
+    requestStatus.data?.status === "in_progress" || (currentSync.data?.in_progress ?? false);
 
   return (
     <div className="max-w-xl space-y-6">
@@ -78,25 +131,6 @@ export function SyncPage() {
       </section>
 
       <section className="rounded-md border border-gray-200 bg-white p-4">
-        <h2 className="text-sm font-medium text-gray-700">Sync now</h2>
-        <p className="mt-1 text-sm text-gray-500">Fetch and classify your most recent Gmail messages.</p>
-        <button
-          onClick={() => sync.mutate(undefined)}
-          disabled={sync.isPending}
-          className="mt-3 rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-        >
-          {sync.isPending ? "Syncing..." : "Sync now"}
-        </button>
-        {sync.isSuccess && (
-          <p className="mt-2 text-sm text-green-700">
-            Fetched {sync.data.fetched} emails — {sync.data.extracted_accepted} accepted,{" "}
-            {sync.data.extracted_needs_review} need review.
-          </p>
-        )}
-        {sync.isError && <p className="mt-2 text-sm text-red-600">{errorMessage(sync.error)}</p>}
-      </section>
-
-      <section className="rounded-md border border-gray-200 bg-white p-4">
         <h2 className="text-sm font-medium text-gray-700">Sync a date range</h2>
         <p className="mt-1 text-sm text-gray-500">
           Backfill older mail from a specific window (up to 3 months at a time). Runs in the
@@ -115,7 +149,8 @@ export function SyncPage() {
 
         {rangeSyncInProgress && (
           <p className="mt-3 text-sm text-gray-600">
-            Syncing {requestStatus.data?.date_from} to {requestStatus.data?.date_to}
+            Syncing {requestStatus.data?.date_from ?? currentSync.data?.date_from} to{" "}
+            {requestStatus.data?.date_to ?? currentSync.data?.date_to}
             {" "}— this can take a while for large ranges.
           </p>
         )}
@@ -129,14 +164,17 @@ export function SyncPage() {
         {requestStatus.data?.status === "partial_failure" && (
           <div className="mt-3 space-y-1 text-sm">
             <p className="text-amber-700">
-              Some parts of {requestStatus.data.date_from} to {requestStatus.data.date_to} failed to
-              sync — re-run "Sync range" for the same dates to retry just those.
+              Some parts of {requestStatus.data.date_from} to {requestStatus.data.date_to} didn't fully
+              sync — re-run "Sync range" for the same dates to retry just those (already-fetched mail
+              won't be re-downloaded, only reclassified).
             </p>
             <ul className="ml-4 list-disc text-gray-600">
               {requestStatus.data.segments.map((segment) => (
                 <li key={segment.id}>
                   {segment.date_from} to {segment.date_to}: {segment.status}
-                  {segment.status === "failed" && segment.error ? ` — ${segment.error}` : ""}
+                  {(segment.status === "failed" || segment.status === "extraction_failed") && segment.error
+                    ? ` — ${segment.error}`
+                    : ""}
                 </li>
               ))}
             </ul>
@@ -147,8 +185,25 @@ export function SyncPage() {
             Sync failed: {requestStatus.data.segments[0]?.error ?? "unknown error"}
           </p>
         )}
-        {startRangeSync.isError && (
+        {startRangeSync.isError && !rangeSyncInProgress && (
           <p className="mt-3 text-sm text-red-600">{errorMessage(startRangeSync.error)}</p>
+        )}
+      </section>
+
+      <section className="rounded-md border border-gray-200 bg-white p-4">
+        <h2 className="text-sm font-medium text-gray-700">Sync history</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Every range sync you've triggered — in progress, succeeded, partially failed, or failed.
+        </p>
+        {syncHistory.isLoading && <p className="mt-3 text-sm text-gray-500">Loading...</p>}
+        {syncHistory.data && syncHistory.data.items.length > 0 ? (
+          <ul className="mt-3 divide-y divide-gray-100">
+            {syncHistory.data.items.map((request) => (
+              <SyncHistoryRow key={request.id} request={request} />
+            ))}
+          </ul>
+        ) : (
+          !syncHistory.isLoading && <p className="mt-3 text-sm text-gray-500">No syncs yet.</p>
         )}
       </section>
 

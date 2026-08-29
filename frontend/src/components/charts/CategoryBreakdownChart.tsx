@@ -4,7 +4,11 @@ import { formatMoney } from "../../lib/dateRange";
 import { CHART_COLORS } from "./colors";
 
 export function CategoryBreakdownChart({ data }: { data: CategorySummary[] }) {
-  if (data.length === 0) {
+  // Spend only — income is almost never meaningfully split across categories (it's
+  // typically just "Income"), so this chart answers "where did the money go."
+  const spendData = data.filter((d) => d.total_spend > 0);
+
+  if (spendData.length === 0) {
     return <EmptyState />;
   }
 
@@ -12,15 +16,15 @@ export function CategoryBreakdownChart({ data }: { data: CategorySummary[] }) {
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
         <Pie
-          data={data}
-          dataKey="total_amount"
+          data={spendData}
+          dataKey="total_spend"
           nameKey="category_name"
           cx="50%"
           cy="50%"
           outerRadius={100}
           label={(entry) => entry.category_name}
         >
-          {data.map((entry, index) => (
+          {spendData.map((entry, index) => (
             <Cell key={entry.category_id ?? entry.category_name} fill={CHART_COLORS[index % CHART_COLORS.length]} />
           ))}
         </Pie>

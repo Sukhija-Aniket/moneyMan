@@ -9,10 +9,25 @@ from moneyman_shared.db.base import Base
 
 # Backend-owned: one row per unsynced gap segment computed for a sync_requests row. The
 # worker never writes here — it only publishes GmailSyncFetchEvent, which the backend
-# applies to mark a segment terminal. total_candidates/processed_candidates exist purely for
-# progress display; a segment is terminal ("success"/"failed") the moment its single
-# GmailSyncFetchEvent arrives, not by counting up to total_candidates itself (the fetch stage
-# already did that counting before emitting the event).
+# applies here. total_candidates/processed_candidates exist purely for progress display.
+#
+# status is a small state machine, not a flat success/failed pair:
+#   in_progress          -> Worker 1 is still listing/fetching from Gmail.
+#   failed                -> the fetch itself failed outright (Gmail API error, user not
+#                            found) — nothing usable was written, fetched_ranges/
+#                            synced_ranges get no entry for this segment's range.
+#   extraction_complete   -> fetch succeeded AND every candidate reached a genuine verdict
+#                            (extracted/not_transaction) — the only status that feeds
+#                            synced_ranges (see sync_fetch_events_consumer.py).
+#   extraction_failed     -> fetch succeeded (so fetched_ranges DOES get an entry — Gmail
+#                            never needs to be re-listed for these dates), but at least one
+#                            candidate ended in classify_failed/extract_failed, which are
+#                            transient LLM-call failures, not verdicts. A later sync request
+#                            covering these dates will see the range missing from
+#                            synced_ranges, recompute it as a gap, and Worker 1's fetch stage
+#                            will find it already in fetched_ranges — skipping Gmail
+#                            entirely and going straight to re-dispatching extraction for
+#                            the still-non-terminal raw_emails rows.
 
 
 class SyncSegment(Base):

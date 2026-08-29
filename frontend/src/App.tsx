@@ -7,6 +7,7 @@ import { TransactionsPage } from "./pages/TransactionsPage";
 import { ReviewQueuePage } from "./pages/ReviewQueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SyncPage } from "./pages/SyncPage";
+import { CategoriesPage } from "./pages/CategoriesPage";
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/review" element={<ReviewQueuePage />} />
         <Route path="/sync" element={<SyncPage />} />
+        <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>

@@ -16,7 +16,7 @@ export function FilterBar({
   const { data: accounts } = useAccounts();
 
   function update(patch: Partial<TransactionFilters>) {
-    onChange({ ...filters, ...patch, page: 1 });
+    onChange({ ...filters, ...patch, offset: 0 });
   }
 
   return (

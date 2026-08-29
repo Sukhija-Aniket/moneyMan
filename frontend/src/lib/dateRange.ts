@@ -5,8 +5,7 @@ function toIsoDate(d: Date): string {
 export function currentMonthRange(): { date_from: string; date_to: string } {
   const now = new Date();
   const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return { date_from: toIsoDate(from), date_to: toIsoDate(to) };
+  return { date_from: toIsoDate(from), date_to: toIsoDate(now) };
 }
 
 export function formatMoney(amount: number, currency = "USD"): string {

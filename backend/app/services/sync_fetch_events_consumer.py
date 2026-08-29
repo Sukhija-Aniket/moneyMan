@@ -29,12 +29,26 @@ def _receive_one(consumer, timeout_millis: int):
 async def _apply_event(event: GmailSyncFetchEvent) -> None:
     async with AsyncSessionLocal() as db:
         segment_id = uuid.UUID(event.segment_id)
-        segment = await sync_request_service.mark_segment_terminal(db, segment_id, event.status, event.error)
+        processed_candidates = (
+            event.extracted + event.not_transaction + event.classify_failed + event.extract_failed
+        )
+        segment = await sync_request_service.mark_segment_terminal(
+            db,
+            segment_id,
+            event.status,
+            event.error,
+            total_candidates=event.total_candidates,
+            processed_candidates=processed_candidates,
+        )
         if segment is None:
             await db.commit()
             return
 
-        if event.status == "success" and segment.date_from is not None and segment.date_to is not None:
+        # Only "extraction_complete" means every candidate reached a genuine verdict —
+        # "extraction_failed" still had fetch succeed (fetched_ranges already covers it,
+        # written directly by the worker), but must NOT be merged into synced_ranges, or a
+        # later sync would never revisit these emails for reclassification.
+        if event.status == "extraction_complete" and segment.date_from is not None and segment.date_to is not None:
             await sync_coverage_service.merge_insert_synced_range(
                 db, segment.user_id, segment.date_from, segment.date_to
             )

@@ -48,14 +48,31 @@ async def get_overview(
     }
 
 
+def _income_and_spend_sums():
+    """Shared pair of aggregate columns: credit/debit amounts kept separate rather than
+    summed together, since Transaction.amount is always stored as a positive magnitude
+    regardless of direction (see get_overview) — a plain SUM(amount) would add a bank's
+    income and spend into one meaningless number."""
+    return (
+        func.coalesce(func.sum(Transaction.amount).filter(Transaction.txn_type == "credit"), 0).label(
+            "total_income"
+        ),
+        func.coalesce(func.sum(Transaction.amount).filter(Transaction.txn_type == "debit"), 0).label(
+            "total_spend"
+        ),
+    )
+
+
 async def get_by_category(
     db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
 ) -> list[dict]:
+    total_income, total_spend = _income_and_spend_sums()
     stmt = (
         select(
             Category.id,
             Category.name,
-            func.coalesce(func.sum(Transaction.amount), 0).label("total_amount"),
+            total_income,
+            total_spend,
             func.count(Transaction.id).label("transaction_count"),
         )
         .select_from(Transaction)
@@ -74,7 +91,8 @@ async def get_by_category(
         {
             "category_id": row.id,
             "category_name": row.name or "Uncategorized",
-            "total_amount": row.total_amount,
+            "total_income": row.total_income,
+            "total_spend": row.total_spend,
             "transaction_count": row.transaction_count,
         }
         for row in rows
@@ -84,13 +102,15 @@ async def get_by_category(
 async def get_by_account(
     db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
 ) -> list[dict]:
+    total_income, total_spend = _income_and_spend_sums()
     stmt = (
         select(
             Account.id,
             Account.display_name,
             Account.issuer_name,
             Account.last4,
-            func.coalesce(func.sum(Transaction.amount), 0).label("total_amount"),
+            total_income,
+            total_spend,
             func.count(Transaction.id).label("transaction_count"),
         )
         .select_from(Transaction)
@@ -115,7 +135,8 @@ async def get_by_account(
             {
                 "account_id": row.id,
                 "display_name": name,
-                "total_amount": row.total_amount,
+                "total_income": row.total_income,
+                "total_spend": row.total_spend,
                 "transaction_count": row.transaction_count,
             }
         )
@@ -125,10 +146,12 @@ async def get_by_account(
 async def get_by_bank(
     db: AsyncSession, user_id: uuid.UUID, date_from: date | None = None, date_to: date | None = None
 ) -> list[dict]:
+    total_income, total_spend = _income_and_spend_sums()
     stmt = (
         select(
             func.coalesce(Account.issuer_name, "Unknown").label("issuer_name"),
-            func.coalesce(func.sum(Transaction.amount), 0).label("total_amount"),
+            total_income,
+            total_spend,
             func.count(Transaction.id).label("transaction_count"),
         )
         .select_from(Transaction)
@@ -146,7 +169,8 @@ async def get_by_bank(
     return [
         {
             "issuer_name": row.issuer_name,
-            "total_amount": row.total_amount,
+            "total_income": row.total_income,
+            "total_spend": row.total_spend,
             "transaction_count": row.transaction_count,
         }
         for row in rows

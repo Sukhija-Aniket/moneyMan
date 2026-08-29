@@ -1,4 +1,4 @@
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AccountSummary } from "../../api/endpoints/summary";
 import { formatMoney } from "../../lib/dateRange";
 
@@ -18,7 +18,9 @@ export function AccountBreakdownChart({ data }: { data: AccountSummary[] }) {
         <XAxis type="number" />
         <YAxis type="category" dataKey="display_name" width={140} />
         <Tooltip formatter={(value: number) => formatMoney(value)} />
-        <Bar dataKey="total_amount" fill="#2563eb" />
+        <Legend />
+        <Bar dataKey="total_spend" name="Spend" fill="#dc2626" />
+        <Bar dataKey="total_income" name="Income" fill="#16a34a" />
       </BarChart>
     </ResponsiveContainer>
   );

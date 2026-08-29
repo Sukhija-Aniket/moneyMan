@@ -5,7 +5,7 @@ from datetime import date
 
 from sqlalchemy import select
 
-from moneyman_shared.db.models.raw_email import RawEmail
+from moneyman_shared.db.models.fetched_range import FetchedRange
 from moneyman_shared.db.models.user import User
 from moneyman_shared.db.session import AsyncSessionLocal
 from moneyman_shared.messaging.client import get_pulsar_client
@@ -23,6 +23,7 @@ from moneyman_shared.messaging.topics import (
     GMAIL_SYNC_JOBS_SUBSCRIPTION,
     GMAIL_SYNC_JOBS_TOPIC,
 )
+from moneyman_shared.services.coverage import merge_insert_range
 from moneyman_shared.services.gmail_sync import GmailSyncError, fetch_and_queue_candidates
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,14 @@ logger = logging.getLogger(__name__)
 # stage). This process is the only one that knows a segment's total_candidates count and
 # tracks how many have settled, so it — not the backend — decides when a segment is fully
 # drained and emits the single GmailSyncFetchEvent for it.
+#
+# fetched_ranges pre-check: before calling Gmail's list API at all, check whether this
+# segment's date range is already in fetched_ranges (meaning raw_emails were already written
+# for it on a prior attempt, even if extraction later failed for some of them — see
+# moneyman_shared.db.models.fetched_range). If fully covered, skip Gmail entirely and derive
+# candidates straight from the existing raw_emails rows. Gmail's list/get_message calls are
+# the genuinely expensive, rate-limited part of this pipeline — a classify_failed/
+# extract_failed retry should never re-pay that cost.
 #
 # Ack discipline: a GmailSyncJob message is NOT acked when fetch_and_queue_candidates
 # returns — only once the segment reaches a truly terminal state (every EmailExtractionEvent
@@ -94,6 +103,10 @@ class _SegmentState:
     def done(self) -> bool:
         return self.received >= self.total
 
+    @property
+    def has_failures(self) -> bool:
+        return self.classify_failed > 0 or self.extract_failed > 0
+
 
 class FetchStage:
     def __init__(self) -> None:
@@ -143,7 +156,9 @@ class FetchStage:
                 return
 
             try:
-                fetch_result = await fetch_and_queue_candidates(db, user, date_from, date_to)
+                fetch_result = await fetch_and_queue_candidates(
+                    db, user, date_from, date_to, skip_gmail_if_already_fetched=True
+                )
             except GmailSyncError as exc:
                 logger.warning("Segment %s fetch failed: %s", segment_id, exc)
                 async with self._lock:
@@ -161,6 +176,14 @@ class FetchStage:
                 )
                 return
 
+            # Fetch itself succeeded — merge-insert into fetched_ranges now, regardless of
+            # what extraction later does with these candidates. Gmail must never be
+            # re-listed for these dates again, even if some candidates end up
+            # classify_failed/extract_failed.
+            if date_from is not None and date_to is not None:
+                await merge_insert_range(db, FetchedRange, user.id, date_from, date_to)
+                await db.commit()
+
         async with self._lock:
             self._fetch_meta[segment_id] = {
                 "fetched": fetch_result.fetched,
@@ -169,7 +192,7 @@ class FetchStage:
             self._segments[segment_id] = _SegmentState(total=len(fetch_result.candidate_raw_email_ids), msg=msg)
 
         if not fetch_result.candidate_raw_email_ids:
-            await self._publish_fetch_event(fetch_events_producer, jobs_consumer, segment_id, "success")
+            await self._publish_fetch_event(fetch_events_producer, jobs_consumer, segment_id, "extraction_complete")
             return
 
         for raw_email_id in fetch_result.candidate_raw_email_ids:
@@ -200,9 +223,29 @@ class FetchStage:
                 return
             state.record(event.outcome)
             is_done = state.done
+            has_failures = state.has_failures
 
         if is_done:
-            await self._publish_fetch_event(fetch_events_producer, jobs_consumer, event.segment_id, "success")
+            # classify_failed/extract_failed are transient LLM-call failures (see
+            # extract_one_email), not verdicts. fetched_ranges already has this range
+            # covered (merged in handle_sync_job once fetch itself succeeded) — but
+            # "extraction_complete" (which feeds synced_ranges) requires every candidate to
+            # have reached a GENUINE verdict, so any failure here reports
+            # "extraction_failed" instead: fetch is done (never re-list Gmail for these
+            # dates), but the range stays an open gap for synced_ranges purposes, so a
+            # later sync request will pick these emails up again for reclassification.
+            if has_failures:
+                error = (
+                    f"{state.classify_failed} email(s) failed classification, "
+                    f"{state.extract_failed} failed extraction (of {state.total} candidates)."
+                )
+                await self._publish_fetch_event(
+                    fetch_events_producer, jobs_consumer, event.segment_id, "extraction_failed", error=error
+                )
+            else:
+                await self._publish_fetch_event(
+                    fetch_events_producer, jobs_consumer, event.segment_id, "extraction_complete"
+                )
 
 
 async def run_fetch_stage_forever(stage: FetchStage) -> None:

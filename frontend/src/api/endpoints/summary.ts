@@ -17,20 +17,23 @@ export interface SummaryOverview {
 export interface CategorySummary {
   category_id: string | null;
   category_name: string;
-  total_amount: number;
+  total_income: number;
+  total_spend: number;
   transaction_count: number;
 }
 
 export interface AccountSummary {
   account_id: string | null;
   display_name: string;
-  total_amount: number;
+  total_income: number;
+  total_spend: number;
   transaction_count: number;
 }
 
 export interface BankSummary {
   issuer_name: string;
-  total_amount: number;
+  total_income: number;
+  total_spend: number;
   transaction_count: number;
 }
 

@@ -1,11 +1,12 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moneyman_shared.db.models.category import Category
+from moneyman_shared.db.models.transaction import Transaction
 from moneyman_shared.db.models.user import User
 from moneyman_shared.db.session import get_db
 from app.deps import get_current_user
@@ -73,5 +74,26 @@ async def delete_category(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     category = await _get_owned_category(db, current_user.id, category_id)
+
+    txn_count = (
+        await db.execute(
+            select(func.count()).select_from(Transaction).where(Transaction.category_id == category_id)
+        )
+    ).scalar_one()
+    if txn_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Category is used by {txn_count} transaction(s) — reassign or remove them first.",
+        )
+
+    child_count = (
+        await db.execute(select(func.count()).select_from(Category).where(Category.parent_id == category_id))
+    ).scalar_one()
+    if child_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Category has {child_count} subcategory(ies) — remove or reassign them first.",
+        )
+
     await db.delete(category)
     await db.commit()

@@ -9,9 +9,8 @@ const DEFAULT_PAGE_SIZE = 25;
 export function ReviewQueuePage() {
   const [filters, setFilters] = useState<TransactionFilters>({
     review_status: "pending",
-    page: 1,
-    page_size: DEFAULT_PAGE_SIZE,
-    sort: "-txn_date",
+    offset: 0,
+    limit: DEFAULT_PAGE_SIZE,
   });
 
   const { data, isLoading, isError } = useTransactions(filters);
@@ -43,10 +42,10 @@ export function ReviewQueuePage() {
             <TransactionTable transactions={data.items} mode="review" />
           )}
           <Pagination
-            page={data.page}
-            pageSize={data.page_size}
+            limit={data.limit}
+            offset={data.offset}
             total={data.total}
-            onPageChange={(page) => setFilters((f) => ({ ...f, page }))}
+            onOffsetChange={(offset) => setFilters((f) => ({ ...f, offset }))}
           />
         </>
       )}

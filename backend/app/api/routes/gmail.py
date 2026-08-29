@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,10 +11,15 @@ from moneyman_shared.db.models.raw_email import RawEmail
 from moneyman_shared.db.models.user import User
 from moneyman_shared.db.session import get_db
 from moneyman_shared.messaging.schemas import GmailSyncJob
-from moneyman_shared.services.gmail_sync import GmailSyncError, run_gmail_sync
 from moneyman_shared.services.user_time import today_for_user
 from app.deps import get_current_user
-from app.schemas.gmail import CurrentSyncOut, GmailStatus, GmailSyncRequest, GmailSyncResult, SyncRequestOut
+from app.schemas.gmail import (
+    CurrentSyncOut,
+    GmailStatus,
+    GmailSyncRequest,
+    SyncRequestListResponse,
+    SyncRequestOut,
+)
 from app.services import sync_coverage_service, sync_request_service
 from app.services.sync_job_publisher import publish_sync_job
 
@@ -65,25 +70,6 @@ def _validate_sync_range(date_from: date | None, date_to: date | None, user_time
         )
 
 
-@router.post("/sync", response_model=GmailSyncResult)
-async def sync_now(
-    sync_request: GmailSyncRequest = GmailSyncRequest(),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> GmailSyncResult:
-    """Plain sync (no date range): runs synchronously and returns the result — bounded to
-    GMAIL_SYNC_MAX_RESULTS messages, so this stays fast. For a date range, use
-    POST /gmail/sync/range instead, which runs asynchronously via the worker."""
-    _validate_sync_range(sync_request.date_from, sync_request.date_to, current_user.timezone)
-
-    try:
-        counters = await run_gmail_sync(db, current_user, sync_request.date_from, sync_request.date_to)
-    except GmailSyncError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    return GmailSyncResult(**counters.as_dict())
-
-
 @router.post("/sync/range", response_model=SyncRequestOut, status_code=status.HTTP_202_ACCEPTED)
 async def sync_range(
     sync_request: GmailSyncRequest,
@@ -131,6 +117,19 @@ async def sync_range(
         )
 
     return request
+
+
+@router.get("/sync/requests", response_model=SyncRequestListResponse)
+async def list_sync_requests(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=20, le=100, ge=1),
+    offset: int = Query(default=0, ge=0),
+) -> SyncRequestListResponse:
+    """History for the "Sync a date range" page — every range sync the user has triggered,
+    newest first, with per-segment status/error detail."""
+    items, total = await sync_request_service.list_requests(db, current_user.id, limit, offset)
+    return SyncRequestListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/sync/requests/{request_id}", response_model=SyncRequestOut)

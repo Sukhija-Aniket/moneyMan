@@ -4,8 +4,8 @@ import {
   getCurrentSync,
   getGmailStatus,
   getSyncRequest,
+  listSyncRequests,
   triggerRangeSync,
-  triggerSync,
   SyncRange,
 } from "../api/endpoints/gmail";
 
@@ -13,18 +13,6 @@ export function useGmailStatus() {
   return useQuery({
     queryKey: ["gmail", "status"],
     queryFn: getGmailStatus,
-  });
-}
-
-export function useGmailSync() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (range?: SyncRange) => triggerSync(range),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["gmail", "status"] });
-      queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["summary"] });
-    },
   });
 }
 
@@ -65,5 +53,16 @@ export function useCurrentSync() {
     queryKey: ["gmail", "current-sync"],
     queryFn: getCurrentSync,
     refetchInterval: (q) => (q.state.data?.in_progress ? 3000 : false),
+  });
+}
+
+/** Full history of range-sync requests (newest first) for the "Sync a date range" page —
+ * every range ever triggered, its status, and per-segment detail. Polls while any request
+ * on the current page is still in_progress. */
+export function useSyncHistory(params: { limit?: number; offset?: number } = {}) {
+  return useQuery({
+    queryKey: ["gmail", "sync-history", params],
+    queryFn: () => listSyncRequests(params),
+    refetchInterval: (q) => (q.state.data?.items.some((r) => r.status === "in_progress") ? 3000 : false),
   });
 }

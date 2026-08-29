@@ -13,6 +13,7 @@ from moneyman_shared.db.session import get_db
 from app.deps import create_session_token, get_current_user
 from app.schemas.user import UserOut, UserSettingsUpdate
 from moneyman_shared.services import google_oauth, token_crypto
+from moneyman_shared.services.default_categories import create_default_categories
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -75,6 +76,7 @@ async def google_callback(
         )
         db.add(user)
         await db.flush()
+        await create_default_categories(db, user.id)
     else:
         user.email = token_result.user_info.email
         user.full_name = token_result.user_info.full_name

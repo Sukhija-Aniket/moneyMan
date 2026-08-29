@@ -4,16 +4,30 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
+
+from moneyman_shared.db.models.raw_email import RawEmail
 
 from moneyman_shared.db.models.review_status import ReviewStatus
 from moneyman_shared.db.models.transaction import Transaction
 from moneyman_shared.db.models.user import User
 from moneyman_shared.db.session import get_db
 from app.deps import get_current_user
-from app.schemas.transaction import TransactionListResponse, TransactionOut, TransactionUpdate
+from app.schemas.transaction import RawEmailOut, TransactionListResponse, TransactionOut, TransactionUpdate
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+
+def _transaction_out(transaction: Transaction) -> TransactionOut:
+    """raw_email is only ever eager-loaded for its gmail_message_id (shown in the table for
+    spotting duplicates) — the full body is fetched separately, on demand, via
+    GET /transactions/{id}/raw-email, since embedding it here would ship every row's full
+    email body on every list/update response."""
+    out = TransactionOut.model_validate(transaction)
+    out.raw_email_gmail_message_id = (
+        transaction.raw_email.gmail_message_id if transaction.raw_email is not None else None
+    )
+    return out
 
 
 def _apply_filters(
@@ -89,7 +103,11 @@ async def list_transactions(
     total = (await db.execute(count_stmt)).scalar_one()
 
     stmt = (
-        base_stmt.options(selectinload(Transaction.category), selectinload(Transaction.account))
+        base_stmt.options(
+            selectinload(Transaction.category),
+            selectinload(Transaction.account),
+            selectinload(Transaction.raw_email).load_only(RawEmail.id, RawEmail.gmail_message_id),
+        )
         .order_by(Transaction.txn_date.desc().nullslast(), Transaction.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -98,7 +116,7 @@ async def list_transactions(
     items = result.scalars().all()
 
     return TransactionListResponse(
-        items=[TransactionOut.model_validate(t) for t in items],
+        items=[_transaction_out(t) for t in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -108,7 +126,11 @@ async def list_transactions(
 async def _get_owned_transaction(db: AsyncSession, user_id: uuid.UUID, transaction_id: uuid.UUID) -> Transaction:
     stmt = (
         select(Transaction)
-        .options(selectinload(Transaction.category), selectinload(Transaction.account))
+        .options(
+            selectinload(Transaction.category),
+            selectinload(Transaction.account),
+            selectinload(Transaction.raw_email).load_only(RawEmail.id, RawEmail.gmail_message_id),
+        )
         .where(Transaction.user_id == user_id, Transaction.id == transaction_id)
     )
     result = await db.execute(stmt)
@@ -125,7 +147,27 @@ async def get_transaction(
     db: AsyncSession = Depends(get_db),
 ) -> TransactionOut:
     transaction = await _get_owned_transaction(db, current_user.id, transaction_id)
-    return TransactionOut.model_validate(transaction)
+    return _transaction_out(transaction)
+
+
+@router.get("/{transaction_id}/raw-email", response_model=RawEmailOut)
+async def get_transaction_raw_email(
+    transaction_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RawEmailOut:
+    """Fetched on demand ("View raw") rather than embedded in the list/get transaction
+    responses — the full email body can be many KB and most rows are never opened."""
+    stmt = (
+        select(Transaction)
+        .options(selectinload(Transaction.raw_email))
+        .where(Transaction.user_id == current_user.id, Transaction.id == transaction_id)
+    )
+    result = await db.execute(stmt)
+    transaction = result.scalar_one_or_none()
+    if transaction is None or transaction.raw_email is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw email not found")
+    return RawEmailOut.model_validate(transaction.raw_email)
 
 
 @router.patch("/{transaction_id}", response_model=TransactionOut)
@@ -140,10 +182,12 @@ async def update_transaction(
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(transaction, field, value)
+    if "review_status" in update_data:
+        transaction.reviewed_by = "human"
 
     await db.commit()
-    await db.refresh(transaction, attribute_names=["category", "account"])
-    return TransactionOut.model_validate(transaction)
+    await db.refresh(transaction, attribute_names=["category", "account", "raw_email"])
+    return _transaction_out(transaction)
 
 
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)

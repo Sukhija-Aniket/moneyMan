@@ -1,8 +1,9 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models.sync_request import SyncRequest
 from app.db.models.sync_segment import SyncSegment
@@ -73,6 +74,29 @@ async def get_request(db: AsyncSession, user_id: uuid.UUID, request_id: uuid.UUI
     return request
 
 
+async def list_requests(
+    db: AsyncSession, user_id: uuid.UUID, limit: int, offset: int
+) -> tuple[list[SyncRequest], int]:
+    """Sync history for the "Sync a date range" page — every request the user has ever
+    triggered (in progress, succeeded, partially failed, or failed), newest first."""
+    total = (
+        await db.execute(
+            select(func.count()).select_from(SyncRequest).where(SyncRequest.user_id == user_id)
+        )
+    ).scalar_one()
+
+    stmt = (
+        select(SyncRequest)
+        .options(selectinload(SyncRequest.segments))
+        .where(SyncRequest.user_id == user_id)
+        .order_by(SyncRequest.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all()), total
+
+
 async def get_current_in_progress(db: AsyncSession, user_id: uuid.UUID) -> SyncSegment | None:
     result = await db.execute(
         select(SyncSegment)
@@ -88,13 +112,22 @@ async def get_segment_by_id(db: AsyncSession, segment_id: uuid.UUID) -> SyncSegm
 
 
 async def mark_segment_terminal(
-    db: AsyncSession, segment_id: uuid.UUID, status: str, error: str | None = None
+    db: AsyncSession,
+    segment_id: uuid.UUID,
+    status: str,
+    error: str | None = None,
+    total_candidates: int | None = None,
+    processed_candidates: int | None = None,
 ) -> SyncSegment | None:
     segment = await get_segment_by_id(db, segment_id)
     if segment is None:
         return None
     segment.status = status
     segment.error = error
+    if total_candidates is not None:
+        segment.total_candidates = total_candidates
+    if processed_candidates is not None:
+        segment.processed_candidates = processed_candidates
     segment.completed_at = datetime.now(timezone.utc)
     await db.flush()
     return segment
@@ -102,9 +135,12 @@ async def mark_segment_terminal(
 
 async def maybe_finalize_request(db: AsyncSession, sync_request_id: uuid.UUID) -> None:
     """Derives and sets sync_requests.status from its children once every segment is
-    terminal: "success" if all succeeded, "partial_failure" if a mix, "failed" if all
-    failed. Leaves status untouched (still "in_progress") while any segment remains
-    in_progress."""
+    terminal (status != "in_progress"): "success" if every segment reached
+    "extraction_complete", "failed" if every segment ended in "failed" (fetch itself never
+    succeeded for any of them), "partial_failure" otherwise — which covers both a genuine
+    mix of segment outcomes and the "fetch succeeded but some emails still need
+    reclassification" case ("extraction_failed"). Leaves status untouched (still
+    "in_progress") while any segment remains in_progress."""
     result = await db.execute(select(SyncRequest).where(SyncRequest.id == sync_request_id))
     request = result.scalar_one_or_none()
     if request is None:
@@ -115,10 +151,11 @@ async def maybe_finalize_request(db: AsyncSession, sync_request_id: uuid.UUID) -
     if not segments or any(s.status == "in_progress" for s in segments):
         return
 
-    succeeded = sum(1 for s in segments if s.status == "success")
+    succeeded = sum(1 for s in segments if s.status == "extraction_complete")
+    all_failed = all(s.status == "failed" for s in segments)
     if succeeded == len(segments):
         request.status = "success"
-    elif succeeded == 0:
+    elif all_failed:
         request.status = "failed"
     else:
         request.status = "partial_failure"

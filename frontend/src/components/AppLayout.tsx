@@ -36,6 +36,9 @@ export function AppLayout() {
               <NavLink to="/sync" className={navLinkClass}>
                 Sync
               </NavLink>
+              <NavLink to="/categories" className={navLinkClass}>
+                Categories
+              </NavLink>
               <NavLink to="/settings" className={navLinkClass}>
                 Settings
               </NavLink>

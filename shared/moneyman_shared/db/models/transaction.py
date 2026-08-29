@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from moneyman_shared.db.base import Base
 from moneyman_shared.db.models.review_status import REVIEW_STATUSES, ReviewStatus
+from moneyman_shared.db.models.reviewed_by import REVIEWED_BY_VALUES, ReviewedBy
 
 if TYPE_CHECKING:
     from moneyman_shared.db.models.account import Account
@@ -23,6 +24,10 @@ class Transaction(Base):
         CheckConstraint(
             f"review_status IN ({', '.join(repr(s) for s in REVIEW_STATUSES)})",
             name="ck_transactions_review_status",
+        ),
+        CheckConstraint(
+            f"reviewed_by IN ({', '.join(repr(s) for s in REVIEWED_BY_VALUES)})",
+            name="ck_transactions_reviewed_by",
         ),
     )
 
@@ -54,6 +59,11 @@ class Transaction(Base):
 
     confidence_score: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
     review_status: Mapped[ReviewStatus] = mapped_column(String, nullable=False, default="pending", index=True)
+    # Set to "human" whenever review_status is changed via PATCH /transactions/{id} (the
+    # only place a person/API caller can act) — "system" when the extraction pipeline
+    # auto-confirms a high-confidence transaction without it ever going through "pending".
+    # Lets the UI hide "Move to review" for transactions the user already vetted themself.
+    reviewed_by: Mapped[ReviewedBy | None] = mapped_column(String, nullable=True)
     ambiguity_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     extraction_raw_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

@@ -9,17 +9,6 @@ class GmailSyncRequest(BaseModel):
     date_to: date | None = None
 
 
-class GmailSyncResult(BaseModel):
-    fetched: int
-    gate1_rejected: int
-    classify_failed: int
-    classified_non_transaction: int
-    extracted_accepted: int
-    extracted_needs_review: int
-    extracted_discarded: int
-    extract_failed: int
-
-
 class SyncSegmentOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -43,6 +32,13 @@ class SyncRequestOut(BaseModel):
     status: str
     created_at: datetime
     segments: list[SyncSegmentOut] = []
+
+
+class SyncRequestListResponse(BaseModel):
+    items: list[SyncRequestOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class CurrentSyncOut(BaseModel):

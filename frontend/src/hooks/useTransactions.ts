@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteTransaction,
+  getTransactionRawEmail,
   listTransactions,
   TransactionFilters,
   TransactionUpdate,
@@ -12,6 +13,18 @@ export function useTransactions(filters: TransactionFilters) {
     queryKey: ["transactions", filters],
     queryFn: () => listTransactions(filters),
     placeholderData: (prev) => prev,
+  });
+}
+
+/** Only fetches the (potentially large) raw email body when `transactionId` is set —
+ * pass null until the user actually clicks "View raw". Cached per transaction id so
+ * reopening the same one doesn't re-fetch. */
+export function useTransactionRawEmail(transactionId: string | null) {
+  return useQuery({
+    queryKey: ["transactions", transactionId, "raw-email"],
+    queryFn: () => getTransactionRawEmail(transactionId as string),
+    enabled: transactionId !== null,
+    staleTime: Infinity,
   });
 }
 

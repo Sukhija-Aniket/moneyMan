@@ -12,8 +12,8 @@ const DEFAULT_PAGE_SIZE = 25;
 export function TransactionsPage() {
   const [filters, setFilters] = useState<TransactionFilters>({
     ...currentMonthRange(),
-    page: 1,
-    page_size: DEFAULT_PAGE_SIZE,
+    offset: 0,
+    limit: DEFAULT_PAGE_SIZE,
   });
 
   const { data, isLoading, isError } = useTransactions(filters);
@@ -38,10 +38,10 @@ export function TransactionsPage() {
         <>
           <TransactionTable transactions={data.items} />
           <Pagination
-            page={data.page}
-            pageSize={data.page_size}
+            limit={data.limit}
+            offset={data.offset}
             total={data.total}
-            onPageChange={(page) => setFilters((f) => ({ ...f, page }))}
+            onOffsetChange={(offset) => setFilters((f) => ({ ...f, offset }))}
           />
         </>
       )}
