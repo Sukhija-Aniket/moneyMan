@@ -1,15 +1,18 @@
 import { apiFetch } from "../client";
+import { TxnType } from "./transactions";
 
 export interface Category {
   id: string;
   name: string;
   parent_id: string | null;
   is_system: boolean;
+  txn_type: TxnType;
 }
 
 export interface CategoryCreate {
   name: string;
   parent_id?: string | null;
+  txn_type: TxnType;
 }
 
 export async function listCategories(): Promise<Category[]> {

@@ -30,7 +30,12 @@ async def create_category(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CategoryOut:
-    category = Category(user_id=current_user.id, name=payload.name, parent_id=payload.parent_id)
+    category = Category(
+        user_id=current_user.id,
+        name=payload.name,
+        parent_id=payload.parent_id,
+        txn_type=payload.txn_type,
+    )
     db.add(category)
     try:
         await db.commit()

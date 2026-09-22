@@ -316,6 +316,16 @@ async def extract_one_email(db: AsyncSession, user: User, raw_email_id: uuid.UUI
         await db.commit()
         return "not_transaction"
 
+    # Demat/brokerage securities activity (buy/sell orders, etc.) is real money movement but
+    # not a bank/card transaction, so debit/credit doesn't cleanly apply -- exclude it the same
+    # way as not_transaction, but only when confident. A low-confidence call here falls through
+    # to the normal needs_review path below instead of being silently dropped, so an email that
+    # might actually be a real bank/card transaction still reaches a human.
+    if extraction.is_bank_or_card_txn is False and extraction.confidence >= 0.85:
+        raw_email.classification = "not_transaction"
+        await db.commit()
+        return "not_transaction"
+
     deterministic = extract_deterministic(raw_email.subject, raw_email.body_text, raw_email.received_at)
 
     amount = deterministic.amount if deterministic.amount is not None else extraction.amount
@@ -323,6 +333,8 @@ async def extract_one_email(db: AsyncSession, user: User, raw_email_id: uuid.UUI
     account_last4 = deterministic.account_last4 or extraction.account_last4
 
     needs_review = extraction.confidence < 0.85 or amount is None
+    if extraction.is_bank_or_card_txn is False:
+        needs_review = True
     if deterministic.account_last4 is None and extraction.account_last4 is not None:
         needs_review = True
 
@@ -409,4 +421,90 @@ async def extract_one_email(db: AsyncSession, user: User, raw_email_id: uuid.UUI
         return "extract_failed"
 
     return "extracted"
+
+
+def _describe_manual_transaction(
+    txn_type: str,
+    amount: float,
+    currency: str,
+    account: Account,
+    txn_date: date,
+    merchant: str | None,
+    note: str | None,
+) -> str:
+    """Plain-text description stored as the RawEmail body for a user-entered transaction
+    (see create_manual_transaction) — a human-readable audit record only, e.g. for "View raw"
+    in the UI. Not fed through any extraction — the caller already has the exact structured
+    values, so there's nothing to extract and no LLM call is made here."""
+    verb = "debited from" if txn_type == "debit" else "credited to" if txn_type == "credit" else "transferred via"
+    issuer = account.issuer_name or "your account"
+    account_phrase = f"{issuer} (••{account.last4})" if account.last4 else issuer
+    merchant_line = f" at {merchant}" if merchant else ""
+    note_line = f"\n\nNote: {note}" if note else ""
+    return (
+        f"{currency} {amount:.2f} was {verb} {account_phrase}{merchant_line} "
+        f"on {txn_date.strftime('%d-%m-%Y')}.\n\n"
+        f"This transaction was added manually by the user — there is no source email for "
+        f"it.{note_line}"
+    )
+
+
+async def create_manual_transaction(
+    db: AsyncSession,
+    user: User,
+    txn_type: str,
+    amount: float,
+    currency: str,
+    account_id: uuid.UUID,
+    txn_date: date,
+    merchant: str | None,
+    note: str | None,
+) -> Transaction:
+    """User-entered transaction with no backing email (rare — e.g. a cash payment, or a bank
+    that never emailed a notification). The caller already provides the exact structured
+    values, so there's nothing to extract and no LLM call is made: a RawEmail is still
+    created (a plain-text description, purely for "View raw"/audit-trail consistency with
+    every other transaction) but the Transaction row is built directly from the given
+    fields, confidence_score=1.0, review_status="confirmed" — the user's own input needs no
+    review. The account is one the user picks from their existing accounts list (not typed
+    freeform), so no fuzzy account matching is needed here — unlike extract_one_email, which
+    only ever has LLM-parsed issuer/last4 text to match against."""
+    result = await db.execute(select(Account).where(Account.user_id == user.id, Account.id == account_id))
+    account = result.scalar_one_or_none()
+    if account is None:
+        raise ValueError("Account not found")
+
+    body_text = _describe_manual_transaction(txn_type, amount, currency, account, txn_date, merchant, note)
+    raw_email = RawEmail(
+        user_id=user.id,
+        gmail_message_id=f"manual-{uuid.uuid4()}",
+        sender="manual-entry@moneyman.local",
+        subject=f"Manually added transaction: {currency} {amount:.2f}",
+        snippet=body_text[:200],
+        body_text=body_text,
+        received_at=datetime.now(timezone.utc),
+        classification="extracted",
+    )
+    db.add(raw_email)
+    await db.flush()
+
+    transaction = Transaction(
+        user_id=user.id,
+        raw_email_id=raw_email.id,
+        account_id=account.id,
+        amount=amount,
+        currency=currency,
+        txn_type=txn_type,
+        merchant_raw=merchant,
+        merchant_normalized=merchant,
+        txn_date=txn_date,
+        confidence_score=1.0,
+        review_status="confirmed",
+        reviewed_by="human",
+        extraction_raw_json={"source": "manual"},
+    )
+    db.add(transaction)
+    await db.commit()
+    await db.refresh(transaction)
+    return transaction
 

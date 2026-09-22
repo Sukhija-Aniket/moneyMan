@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ApiError } from "../api/client";
 import { Category } from "../api/endpoints/categories";
+import { TxnType } from "../api/endpoints/transactions";
 import { useCategories, useCreateCategory, useDeleteCategory } from "../hooks/useCategories";
 
 function errorMessage(err: Error | null): string | null {
@@ -13,12 +14,13 @@ export function CategoriesPage() {
   const createCategory = useCreateCategory();
   const deleteCategory = useDeleteCategory();
   const [newName, setNewName] = useState("");
+  const [newTxnType, setNewTxnType] = useState<TxnType>("debit");
   const [deleteError, setDeleteError] = useState<{ categoryName: string; message: string } | null>(null);
 
   function handleAdd() {
     const name = newName.trim();
     if (!name) return;
-    createCategory.mutate({ name }, { onSuccess: () => setNewName("") });
+    createCategory.mutate({ name, txn_type: newTxnType }, { onSuccess: () => setNewName("") });
   }
 
   function handleDelete(category: Category) {
@@ -46,6 +48,14 @@ export function CategoriesPage() {
             placeholder="e.g. Travel, Medicines, Entertainment"
             className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
           />
+          <select
+            value={newTxnType}
+            onChange={(e) => setNewTxnType(e.target.value as TxnType)}
+            className="rounded-md border border-gray-300 px-2 py-2 text-sm"
+          >
+            <option value="debit">Debit</option>
+            <option value="credit">Credit</option>
+          </select>
           <button
             onClick={handleAdd}
             disabled={createCategory.isPending || !newName.trim()}
@@ -71,6 +81,15 @@ export function CategoriesPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-gray-700">
                     {category.name}
+                    <span
+                      className={`ml-2 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        category.txn_type === "credit"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      {category.txn_type}
+                    </span>
                     {category.is_system && (
                       <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                         Default

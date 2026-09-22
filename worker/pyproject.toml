@@ -5,6 +5,7 @@ description = "Two-stage Pulsar consumer: fetches Gmail messages per sync segmen
 requires-python = ">=3.11"
 dependencies = [
     "moneyman-shared",
+    "watchfiles>=1.0.0",
 ]
 
 [build-system]

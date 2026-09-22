@@ -12,8 +12,15 @@ from moneyman_shared.db.models.review_status import ReviewStatus
 from moneyman_shared.db.models.transaction import Transaction
 from moneyman_shared.db.models.user import User
 from moneyman_shared.db.session import get_db
+from moneyman_shared.services.gmail_sync import create_manual_transaction
 from app.deps import get_current_user
-from app.schemas.transaction import RawEmailOut, TransactionListResponse, TransactionOut, TransactionUpdate
+from app.schemas.transaction import (
+    RawEmailOut,
+    TransactionCreate,
+    TransactionListResponse,
+    TransactionOut,
+    TransactionUpdate,
+)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -121,6 +128,34 @@ async def list_transactions(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/manual", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
+async def create_manual_transaction_route(
+    payload: TransactionCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TransactionOut:
+    """For a transaction with no backing email (rare — e.g. cash, or a bank that never sent
+    a notification). Builds a synthetic email from the given fields and runs it through the
+    real extraction pipeline (see create_manual_transaction) rather than writing the
+    Transaction directly, so account matching/duplicate detection stay on one code path."""
+    try:
+        transaction = await create_manual_transaction(
+            db,
+            current_user,
+            txn_type=payload.txn_type,
+            amount=float(payload.amount),
+            currency=payload.currency,
+            account_id=payload.account_id,
+            txn_date=payload.txn_date,
+            merchant=payload.merchant,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return await get_transaction(transaction.id, current_user, db)
 
 
 async def _get_owned_transaction(db: AsyncSession, user_id: uuid.UUID, transaction_id: uuid.UUID) -> Transaction:

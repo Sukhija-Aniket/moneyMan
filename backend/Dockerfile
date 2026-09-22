@@ -33,9 +33,16 @@ COPY backend/pyproject.toml backend/alembic.ini /app/
 COPY backend/alembic /app/alembic
 COPY backend/app /app/app
 
-RUN pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt /shared \
+# -e (editable) on /shared too: a plain (non-editable) install copies files into
+# site-packages at build time and never looks at /shared again, which silently defeats the
+# /shared bind mount in infra/docker-compose.yml -- edits under shared/ would be invisible
+# to the running app even with --reload watching that path.
+RUN pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt -e /shared \
     && pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt -e .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# --reload-dir /shared: shared/ is bind-mounted separately from app/ in dev (see
+# infra/docker-compose.yml) and uvicorn's default reload watch is CWD-only, so it needs to
+# be told about that second tree explicitly to pick up moneyman_shared edits.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app --reload-dir /shared"]

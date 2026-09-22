@@ -1,4 +1,4 @@
-import { TransactionFilters, TxnType } from "../api/endpoints/transactions";
+import { accountDisplayName, TransactionFilters, TxnType } from "../api/endpoints/transactions";
 import { useCategories } from "../hooks/useCategories";
 import { useAccounts } from "../hooks/useAccounts";
 import { DateRangePicker } from "./DateRangePicker";
@@ -55,7 +55,7 @@ export function FilterBar({
           <option value="">All</option>
           {accounts?.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.display_name}
+              {accountDisplayName(a)}
             </option>
           ))}
         </select>
@@ -73,6 +73,7 @@ export function FilterBar({
           <option value="">All</option>
           <option value="debit">Debit</option>
           <option value="credit">Credit</option>
+          <option value="self_transfer">Self Transfer</option>
         </select>
       </label>
 

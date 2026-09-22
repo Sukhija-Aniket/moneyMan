@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { accountDisplayName, Transaction } from "../api/endpoints/transactions";
+import { accountDisplayName, Transaction, TxnType } from "../api/endpoints/transactions";
+import { useAccounts } from "../hooks/useAccounts";
 import { useCategories } from "../hooks/useCategories";
-import { useUpdateTransaction, useDeleteTransaction, useTransactionRawEmail } from "../hooks/useTransactions";
+import { useUpdateTransaction, useTransactionRawEmail } from "../hooks/useTransactions";
 import { formatMoney } from "../lib/dateRange";
 
 function looksLikeHtml(body: string): boolean {
@@ -84,10 +85,14 @@ export function TransactionTable({
   mode?: "transactions" | "review";
 }) {
   const { data: categories } = useCategories();
+  const { data: accounts } = useAccounts();
   const updateTxn = useUpdateTransaction();
-  const deleteTxn = useDeleteTransaction();
   const [editingMerchantId, setEditingMerchantId] = useState<string | null>(null);
   const [merchantDraft, setMerchantDraft] = useState("");
+  const [editingDateId, setEditingDateId] = useState<string | null>(null);
+  const [dateDraft, setDateDraft] = useState("");
+  const [editingAmountId, setEditingAmountId] = useState<string | null>(null);
+  const [amountDraft, setAmountDraft] = useState("");
   const [viewingRawEmailFor, setViewingRawEmailFor] = useState<string | null>(null);
 
   function startEditMerchant(txn: Transaction) {
@@ -98,6 +103,29 @@ export function TransactionTable({
   function commitMerchant(id: string) {
     updateTxn.mutate({ id, update: { merchant_normalized: merchantDraft } });
     setEditingMerchantId(null);
+  }
+
+  function startEditDate(txn: Transaction) {
+    setEditingDateId(txn.id);
+    setDateDraft(txn.txn_date);
+  }
+
+  function commitDate(id: string) {
+    updateTxn.mutate({ id, update: { txn_date: dateDraft } });
+    setEditingDateId(null);
+  }
+
+  function startEditAmount(txn: Transaction) {
+    setEditingAmountId(txn.id);
+    setAmountDraft(String(txn.amount));
+  }
+
+  function commitAmount(id: string) {
+    const parsed = Number(amountDraft);
+    if (!Number.isNaN(parsed)) {
+      updateTxn.mutate({ id, update: { amount: parsed } });
+    }
+    setEditingAmountId(null);
   }
 
   if (transactions.length === 0) {
@@ -130,7 +158,32 @@ export function TransactionTable({
             const badge = STATUS_BADGE[txn.review_status];
             return (
               <tr key={txn.id} className={txn.review_status === "pending" ? "bg-amber-50" : undefined}>
-                <td className="whitespace-nowrap px-3 py-2 text-gray-700">{txn.txn_date}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-gray-700">
+                  {mode === "review" && editingDateId === txn.id ? (
+                    <input
+                      autoFocus
+                      type="date"
+                      value={dateDraft}
+                      onChange={(e) => setDateDraft(e.target.value)}
+                      onBlur={() => commitDate(txn.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitDate(txn.id);
+                        if (e.key === "Escape") setEditingDateId(null);
+                      }}
+                      className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    />
+                  ) : mode === "review" ? (
+                    <button
+                      onClick={() => startEditDate(txn)}
+                      className="text-left hover:underline"
+                      title="Click to edit"
+                    >
+                      {txn.txn_date}
+                    </button>
+                  ) : (
+                    txn.txn_date
+                  )}
+                </td>
                 <td className="px-3 py-2 text-gray-700">
                   {editingMerchantId === txn.id ? (
                     <input
@@ -166,27 +219,95 @@ export function TransactionTable({
                     className="rounded-md border border-gray-300 px-2 py-1 text-sm"
                   >
                     <option value="">Uncategorized</option>
-                    {categories?.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
+                    {txn.txn_type !== "self_transfer" &&
+                      categories
+                        ?.filter((c) => c.txn_type === txn.txn_type)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
                   </select>
                 </td>
-                <td className="px-3 py-2 text-gray-700">{accountDisplayName(txn.account)}</td>
+                <td className="px-3 py-2 text-gray-700">
+                  {mode === "review" ? (
+                    <select
+                      value={txn.account?.id ?? ""}
+                      onChange={(e) =>
+                        updateTxn.mutate({
+                          id: txn.id,
+                          update: { account_id: e.target.value || undefined },
+                        })
+                      }
+                      className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    >
+                      <option value="">—</option>
+                      {accounts?.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.display_name || `${a.issuer_name} ••${a.last4 ?? ""}`}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    accountDisplayName(txn.account)
+                  )}
+                </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">
-                  {formatMoney(txn.amount, txn.currency)}
+                  {mode === "review" && editingAmountId === txn.id ? (
+                    <input
+                      autoFocus
+                      type="number"
+                      step="0.01"
+                      value={amountDraft}
+                      onChange={(e) => setAmountDraft(e.target.value)}
+                      onBlur={() => commitAmount(txn.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitAmount(txn.id);
+                        if (e.key === "Escape") setEditingAmountId(null);
+                      }}
+                      className="w-24 rounded-md border border-gray-300 px-2 py-1 text-right text-sm"
+                    />
+                  ) : mode === "review" ? (
+                    <button
+                      onClick={() => startEditAmount(txn)}
+                      className="hover:underline"
+                      title="Click to edit"
+                    >
+                      {formatMoney(txn.amount, txn.currency)}
+                    </button>
+                  ) : (
+                    formatMoney(txn.amount, txn.currency)
+                  )}
                 </td>
                 <td className="px-3 py-2">
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      txn.txn_type === "credit"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-gray-100 text-gray-700"
-                    }`}
-                  >
-                    {txn.txn_type}
-                  </span>
+                  {mode === "review" ? (
+                    <select
+                      value={txn.txn_type}
+                      onChange={(e) =>
+                        updateTxn.mutate({
+                          id: txn.id,
+                          update: { txn_type: e.target.value as TxnType },
+                        })
+                      }
+                      className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                    >
+                      <option value="debit">debit</option>
+                      <option value="credit">credit</option>
+                      <option value="self_transfer">self_transfer</option>
+                    </select>
+                  ) : (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        txn.txn_type === "credit"
+                          ? "bg-green-100 text-green-700"
+                          : txn.txn_type === "self_transfer"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      {txn.txn_type}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <span
@@ -237,24 +358,25 @@ export function TransactionTable({
                     </div>
                   ) : (
                     <div className="flex justify-end gap-2">
-                      {txn.review_status !== "pending" && txn.reviewed_by !== "human" && (
+                      {txn.review_status === "pending" ? (
                         <button
-                          onClick={() => updateTxn.mutate({ id: txn.id, update: { review_status: "pending" } })}
-                          className="text-xs text-gray-400 hover:text-amber-700"
-                        >
-                          Move to review
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          if (confirm("Delete this transaction? This cannot be undone.")) {
-                            deleteTxn.mutate(txn.id);
+                          onClick={() =>
+                            updateTxn.mutate({ id: txn.id, update: { review_status: "confirmed" } })
                           }
-                        }}
-                        className="text-xs text-gray-400 hover:text-red-600"
-                      >
-                        Delete
-                      </button>
+                          className="text-xs text-gray-500 hover:text-green-700"
+                        >
+                          Confirm
+                        </button>
+                      ) : (
+                        txn.reviewed_by !== "human" && (
+                          <button
+                            onClick={() => updateTxn.mutate({ id: txn.id, update: { review_status: "pending" } })}
+                            className="text-xs text-gray-400 hover:text-amber-700"
+                          >
+                            Move to review
+                          </button>
+                        )
+                      )}
                     </div>
                   )}
                 </td>

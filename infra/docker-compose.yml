@@ -48,6 +48,10 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+    volumes:
+      - ../backend/app:/app/app
+      - ../backend/alembic:/app/alembic
+      - ../shared:/shared
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +72,9 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ../worker/worker:/app/worker
+      - ../shared:/shared
     depends_on:
       postgres:
         condition: service_healthy

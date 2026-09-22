@@ -43,10 +43,23 @@ class TransactionOut(BaseModel):
     created_at: datetime
 
 
+class TransactionCreate(BaseModel):
+    txn_type: str
+    amount: Decimal
+    currency: str = "INR"
+    account_id: uuid.UUID
+    txn_date: date
+    merchant: str | None = None
+    note: str | None = None
+
+
 class TransactionUpdate(BaseModel):
     category_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
     merchant_normalized: str | None = None
+    txn_date: date | None = None
+    amount: Decimal | None = None
+    txn_type: str | None = None
     review_status: ReviewStatus | None = None
     duplicate_of_transaction_id: uuid.UUID | None = None
 

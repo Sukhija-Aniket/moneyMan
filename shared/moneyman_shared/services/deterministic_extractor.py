@@ -103,7 +103,10 @@ def _parse_date(text: str, received_at: datetime | None) -> date | None:
     notification emails describe a transaction that just happened, so the extracted date
     should be within a few days of when the email actually arrived) — this is what catches
     an LLM-style hallucinated year; a regex match can still land on a footer reference number
-    that happens to look like a date, so the received_at check guards against that too."""
+    that happens to look like a date, so the received_at check guards against that too.
+    Falls back to the email's received_at date when no date string is found in the text at
+    all (e.g. a payment-confirmation template with no explicit date), since these emails are
+    near-real-time — received_at is the best available proxy for the transaction date."""
     candidates: list[date] = []
     for match in _DATE_PATTERN.finditer(text):
         day, month, year_str = int(match["day"]), int(match["month"]), match["year"]
@@ -114,15 +117,15 @@ def _parse_date(text: str, received_at: datetime | None) -> date | None:
         except ValueError:
             continue
 
-    if not candidates:
-        return None
-
     if received_at is None:
-        return candidates[0]
+        return candidates[0] if candidates else None
 
     received_date = received_at.date()
+    if not candidates:
+        return received_date
+
     plausible = [d for d in candidates if abs((d - received_date).days) <= 3]
-    return plausible[0] if plausible else None
+    return plausible[0] if plausible else received_date
 
 
 def _parse_last4(text: str) -> str | None:

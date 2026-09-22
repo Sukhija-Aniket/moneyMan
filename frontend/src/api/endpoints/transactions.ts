@@ -1,6 +1,6 @@
 import { apiFetch, buildDownloadUrl } from "../client";
 
-export type TxnType = "debit" | "credit";
+export type TxnType = "debit" | "credit" | "self_transfer";
 
 export type ReviewStatus = "pending" | "confirmed" | "not_transaction" | "duplicate";
 
@@ -82,9 +82,23 @@ export interface TransactionFilters {
   offset?: number;
 }
 
+export interface TransactionCreate {
+  txn_type: TxnType;
+  amount: number;
+  currency?: string;
+  account_id: string;
+  txn_date: string;
+  merchant?: string;
+  note?: string;
+}
+
 export interface TransactionUpdate {
   category_id?: string;
+  account_id?: string;
   merchant_normalized?: string;
+  txn_date?: string;
+  amount?: number;
+  txn_type?: TxnType;
   review_status?: ReviewStatus;
   duplicate_of_transaction_id?: string;
 }
@@ -97,6 +111,10 @@ export async function listTransactions(
 
 export async function getTransaction(id: string): Promise<Transaction> {
   return apiFetch<Transaction>(`/transactions/${id}`);
+}
+
+export async function createManualTransaction(payload: TransactionCreate): Promise<Transaction> {
+  return apiFetch<Transaction>("/transactions/manual", { method: "POST", body: payload });
 }
 
 export async function getTransactionRawEmail(id: string): Promise<RawEmail> {

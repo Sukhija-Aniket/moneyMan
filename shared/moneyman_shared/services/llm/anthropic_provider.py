@@ -63,6 +63,7 @@ class AnthropicProvider:
                 data = block.input
                 return ExtractionResult(
                     is_transaction=bool(data.get("is_transaction", False)),
+                    is_bank_or_card_txn=data.get("is_bank_or_card_txn"),
                     amount=data.get("amount"),
                     currency=data.get("currency"),
                     txn_type=data.get("txn_type"),
@@ -79,6 +80,7 @@ class AnthropicProvider:
 
         return ExtractionResult(
             is_transaction=False,
+            is_bank_or_card_txn=None,
             amount=None,
             currency=None,
             txn_type=None,

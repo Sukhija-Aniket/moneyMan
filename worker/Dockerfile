@@ -24,7 +24,13 @@ COPY shared /shared
 COPY worker/pyproject.toml /app/
 COPY worker/worker /app/worker
 
-RUN pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt /shared \
+# -e (editable) on /shared too — see backend/Dockerfile for why a plain install here would
+# silently defeat the /shared bind mount in infra/docker-compose.yml.
+RUN pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt -e /shared \
     && pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt -e .
 
-CMD ["python", "-m", "worker.main"]
+# watchfiles restarts the consumer loop on any change under worker/ or shared/ — dev-time
+# convenience so a bind-mounted source edit takes effect without a manual image rebuild
+# (see infra/docker-compose.yml). Plain "python -m worker.main" has no such mechanism on
+# its own since it's a long-running consumer loop, not a dev server like uvicorn.
+CMD ["watchfiles", "python -m worker.main", "/app/worker", "/shared"]

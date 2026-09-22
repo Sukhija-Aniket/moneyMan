@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  createManualTransaction,
   deleteTransaction,
   getTransactionRawEmail,
   listTransactions,
+  TransactionCreate,
   TransactionFilters,
   TransactionUpdate,
   updateTransaction,
@@ -33,6 +35,16 @@ export function useUpdateTransaction() {
   return useMutation({
     mutationFn: ({ id, update }: { id: string; update: TransactionUpdate }) =>
       updateTransaction(id, update),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+    },
+  });
+}
+
+export function useCreateManualTransaction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: TransactionCreate) => createManualTransaction(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
     },

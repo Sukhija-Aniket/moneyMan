@@ -12,6 +12,7 @@ class ClassificationResult:
 @dataclass
 class ExtractionResult:
     is_transaction: bool
+    is_bank_or_card_txn: bool | None
     amount: float | None
     currency: str | None
     txn_type: str | None
